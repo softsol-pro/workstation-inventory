@@ -12,7 +12,7 @@
 |---|---|---|
 | Общее | имя ПК, пользователь, производитель, модель, серийник, ноутбук или нет, время без перезагрузки (> 14 дн. — жёлтый) | то же: `/sys/class/dmi/id`, `chassis_type`, `/proc/uptime` |
 | Процессор | модель, ядра / потоки | `lscpu` |
-| Память | объём (< 8 ГБ — красный, < 16 ГБ — жёлтый), модули: тип, частота, производитель, распайка или съёмная плашка, слоты по BIOS | `/proc/meminfo` + `dmidecode -t memory` (нужен root), та же логика определения распайки |
+| Память | объём (< 8 ГБ — красный, < 16 ГБ — жёлтый), модули: тип, частота, производитель, распайка или съёмная плашка ([как определяется](#распайка-или-слот)), слоты по BIOS | `/proc/meminfo` + `dmidecode -t memory` (нужен root), те же правила определения распайки |
 | Диски | физические диски (SSD / HDD / NVMe, состояние), свободное место на томах | `lsblk` (тип по ROTA и TRAN), SMART через `smartctl`, свободное место на `/` и `/home` |
 | Периферия | мониторы (EDID), принтеры и способ подключения, батарея и её износ, ИБП | мониторы из `/sys/class/drm/*/edid` (`edid-decode`, если установлен), `lpstat`, `/sys/class/power_supply`, ИБП через `upsc` (NUT) или `lsusb` |
 | ОС и обновления | версия, сборка, срок поддержки Microsoft, TPM, Secure Boot, служба обновлений, последнее обновление, доступные обновления, ожидание перезагрузки | дистрибутив, ядро, срок поддержки (Ubuntu / Debian), TPM, Secure Boot, последнее обновление и доступные обновления (apt / dnf / yum / zypper / pacman), `reboot-required` / `needs-restarting` |
@@ -24,20 +24,20 @@
 
 ## Быстрый запуск
 
-Однострочники берут файлы из конкретного релиза, а не из `main`. Подставьте нужную версию вместо `v1.0.0`.
+Однострочники берут файлы из конкретного релиза, а не из `main`. Подставьте нужную версию вместо `v1.0.1`.
 
 ### Windows
 
 PowerShell **от администратора**:
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.0/inventory.ps1')).TrimStart([char]0xFEFF))) -SkipWU
+[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.1/inventory.ps1')).TrimStart([char]0xFEFF))) -SkipWU
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.0/inventory.ps1')).TrimStart([char]0xFEFF))) -Config '\\server\share\inventory\config.json' -CsvPath '\\server\share\inventory\inventory.csv'
+[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.1/inventory.ps1')).TrimStart([char]0xFEFF))) -Config '\\server\share\inventory\config.json' -CsvPath '\\server\share\inventory\inventory.csv'
 ```
 
 > Почему не `irm`: GitHub отдаёт ассеты релиза как `application/octet-stream`, и `Invoke-RestMethod` в Windows PowerShell 5.1
@@ -47,13 +47,13 @@ PowerShell **от администратора**:
 ### Linux
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.0/inventory.sh | sudo bash -s -- --skip-updates
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.1/inventory.sh | sudo bash -s -- --skip-updates
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.0/inventory.sh | sudo bash -s -- --config https://intranet.example.com/inventory/config.json --csv /mnt/share/inventory/inventory.csv
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.1/inventory.sh | sudo bash -s -- --config https://intranet.example.com/inventory/config.json --csv /mnt/share/inventory/inventory.csv
 ```
 
 > Ссылки `releases/download/...` открываются без авторизации, только если репозиторий **публичный**.
@@ -66,7 +66,7 @@ curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/downloa
 ### Windows
 
 ```powershell
-$v = 'v1.0.0'; $b = "https://github.com/softsol-pro/workstation-inventory/releases/download/$v"; $f = "$env:TEMP\inventory.ps1"
+$v = 'v1.0.1'; $b = "https://github.com/softsol-pro/workstation-inventory/releases/download/$v"; $f = "$env:TEMP\inventory.ps1"
 $wc = New-Object Net.WebClient; $wc.DownloadFile("$b/inventory.ps1", $f)
 $expected = (($wc.DownloadString("$b/SHA256SUMS") -split "`n" | Where-Object { $_ -match 'inventory\.ps1' }) -split '\s+')[0]
 if ((Get-FileHash $f -Algorithm SHA256).Hash -eq $expected) { powershell -ExecutionPolicy Bypass -File $f -SkipWU } else { Write-Host 'ХЕШ НЕ СОВПАДАЕТ' -ForegroundColor Red }
@@ -75,7 +75,7 @@ if ((Get-FileHash $f -Algorithm SHA256).Hash -eq $expected) { powershell -Execut
 ### Linux
 
 ```bash
-cd "$(mktemp -d)" && v=v1.0.0 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory.sh" -fsSLO "$b/SHA256SUMS" && sha256sum -c --ignore-missing SHA256SUMS && sudo bash inventory.sh --skip-updates
+cd "$(mktemp -d)" && v=v1.0.1 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory.sh" -fsSLO "$b/SHA256SUMS" && sha256sum -c --ignore-missing SHA256SUMS && sudo bash inventory.sh --skip-updates
 ```
 
 ## Запуск с общей папки (без интернета)
@@ -141,10 +141,30 @@ sudo bash /mnt/share/inventory/inventory.sh --config /mnt/share/inventory/config
 В Linux конфиг разбирается через `jq`, а если его нет — через `python3`. Если нет ни того ни другого, скрипт работает без конфига и предупреждает об этом.
 Регэксп `corpVpnKeyPattern` в Linux проверяется как ERE (bash `=~`), поэтому PCRE-конструкции вроде `\d` или `(?i)` там не работают.
 
+## Распайка или слот
+
+Отдельного поля «распаяно» в SMBIOS нет, поэтому скрипты решают по признакам. Правила идут по порядку, первое сработавшее решает:
+
+| # | Признак | Вердикт |
+|---|---|---|
+| 1 | тип памяти LPDDR | распайка (LPDDR) |
+| 2 | Part Number — номер микросхемы DRAM, а не модуля: `K4…` (Samsung), `H5…` / `H9…` / `HKN…` (SK Hynix), `MT40/41/46/52/53/60/61/62…` (Micron), `NT5…` / `NT6…` (Nanya), `CXDB…` (CXMT) | распайка (номер микросхемы) |
+| 3 | Part Number готового модуля: `M378` / `M471` / `M393` (Samsung), `HMA` / `HMT` / `HMCG` (SK Hynix), `MTA` / `MTC` (Micron), `KVR` / `KF` / `KCP` / `KHX` / `ACR` (Kingston), `CT` / `BL` (Crucial), `F4-` / `F5-` (G.Skill), `CM…` (Corsair) и другие | съёмная плашка (номер модуля) |
+| 4 | настольный корпус (Desktop, Tower, Mini Tower и т. п.) | съёмная плашка (настольный ПК) |
+| 5 | серийник пустой, из нулей или одинаковый у нескольких модулей | скорее распайка |
+| 6 | форм-фактор DIMM или SODIMM | скорее съёмная |
+| 7 | ничего из перечисленного | не определить |
+
+Вердикты 1–4 надёжные, 5–7 — оценка. Если хотя бы один модуль определён по правилам 5–7, в строке «Итого» появляется пометка
+«часть — оценка», а в колонке CSV `ОЗУ распаяно/слоты` — «(оценка)». Объём, который не удалось определить, пишется как `/?N`, например `8/8/?8 (оценка)`.
+
+Списки префиксов заданы в скриптах (`$ChipPn` / `$ModulePn` в Windows, `CHIP_PN` / `MODULE_PN` в Linux). Если встретился модуль,
+который определился как «не определить» или «скорее…», его префикс можно добавить в нужный список.
+
 ## Пример вывода
 
 ```
-Инвентаризация WS-042 — 19.10.2026 14:27 (inventory.ps1 1.0.0)
+Инвентаризация WS-042 — 19.10.2026 14:27 (inventory.ps1 1.0.1)
 Конфиг: \\server\share\inventory\config.json
 
 === Общее ===
@@ -156,8 +176,8 @@ sudo bash /mnt/share/inventory/inventory.sh --config /mnt/share/inventory/config
 
 === Оперативная память ===
   Всего                       16 ГБ (занято 63%, свободно 5.9 ГБ)
-  ChannelA-DIMM0              8 ГБ DDR4-3200 | Samsung M471A1K43DB1 | распайка
-  ChannelB-DIMM0              8 ГБ DDR4-3200 | Samsung M471A1K43DB1 | съёмная плашка
+  ChannelA-DIMM0              8 ГБ DDR4-3200 | Samsung K4AAG165WA-BCWE | распайка (номер микросхемы)
+  ChannelB-DIMM0              8 ГБ DDR4-3200 | Samsung M471A1K43DB1-CWE | съёмная плашка (номер модуля)
   Итого                       распаяно 8 ГБ, в слотах 8 ГБ | слотов по BIOS: 2, макс. 32 ГБ
 
 === Windows и обновления ===
@@ -192,7 +212,7 @@ sudo bash /mnt/share/inventory/inventory.sh --config /mnt/share/inventory/config
 1. Поднять версию в `$ScriptVersion` (`windows/inventory.ps1`) и `VERSION` (`linux/inventory.sh`).
 2. Закоммитить, поставить тег и запушить:
    ```bash
-   git tag v1.0.1 && git push origin v1.0.1
+   git tag v1.0.2 && git push origin v1.0.2
    ```
 3. Workflow [release.yml](.github/workflows/release.yml) проверит, что версия в скриптах совпадает с тегом, и приложит к релизу `inventory.ps1`, `inventory.sh` и `SHA256SUMS`.
 4. Обновить версию в однострочниках этого README.

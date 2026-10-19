@@ -19,7 +19,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
-$ScriptVersion = '1.0.0'
+$ScriptVersion = '1.0.1'
 
 # ================= сроки поддержки Windows =================
 # ОБНОВЛЯТЬ РАЗ В ГОД — когда выходит новая версия Windows 11 (обычно осенью):
@@ -66,6 +66,24 @@ function Test-Port([string]$Ip, [int]$Port, [int]$Ms = 800) {
     catch { $false } finally { $t.Close() }
 }
 function ConvertFrom-WmiString($Arr) { if ($Arr) { (($Arr | Where-Object { $_ -ne 0 }) | ForEach-Object { [char]$_ }) -join '' } }
+
+# Распайка или слот. Поля «распаяно» в SMBIOS нет, поэтому решаем по признакам — первый сработавший решает.
+# Part Number с номером микросхемы DRAM (а не модуля) — память распаяна на плате
+$ChipPn   = '^(K4[A-Z0-9]|H5[A-Z]|H9[A-Z]|HKN|MT(40|41|46|52|53|60|61|62)[A-Z]|NT5|NT6|CXDB)'
+# Part Number готового модуля (Samsung, SK Hynix, Micron, Kingston, Crucial, G.Skill, Corsair, ADATA, HyperX, Team, Silicon Power, Ramaxel)
+$ModulePn = '^(M3[79][0-9]|M47[0-9]|HMA|HMT|HMCG|HMAA|MTA|MTC|KVR|KF[0-9]|KCP|KHX|KTD|KTH|KTL|ACR[0-9]|CT[0-9]|BL[0-9]|F[345]-|CM[A-Z]|AD[45]|AX[45]|HX[45]|TF[0-9]|TED|SP0|RMSA|RMUA|99U5)'
+function Get-MemVerdict([bool]$IsLpddr, [string]$PartNumber, [string]$Serial, [bool]$SerialDup, [bool]$IsDimm, [bool]$IsDesktop) {
+    $pn = $PartNumber.Trim().ToUpper()
+    $snEmpty = ($Serial -match '^0*$') -or ($Serial -in 'Unknown', 'Not Specified', 'None', '[Empty]')
+    if ($IsLpddr)                     { $r = 'распайка (LPDDR)', 'sold', $true }
+    elseif ($pn -match $ChipPn)       { $r = 'распайка (номер микросхемы)', 'sold', $true }
+    elseif ($pn -match $ModulePn)     { $r = 'съёмная плашка (номер модуля)', 'slot', $true }
+    elseif ($IsDesktop)               { $r = 'съёмная плашка (настольный ПК)', 'slot', $true }
+    elseif ($snEmpty -or $SerialDup)  { $r = 'скорее распайка (серийник пустой / повторяется)', 'sold', $false }
+    elseif ($IsDimm)                  { $r = 'скорее съёмная (форм-фактор DIMM / SODIMM)', 'slot', $false }
+    else                              { $r = 'не определить', 'unknown', $false }
+    [pscustomobject]@{ Text = $r[0]; Kind = $r[1]; Sure = $r[2] }
+}
 
 # ================= конфиг =================
 # Всё, что относится к конкретной организации, берётся из JSON-конфига (пример — config.example.json)
@@ -159,22 +177,25 @@ Line 'Всего' "$totalGB ГБ (занято $usedPct%, свободно $free
 
 $mt  = @{ 24 = 'DDR3'; 26 = 'DDR4'; 29 = 'LPDDR3'; 30 = 'LPDDR4'; 34 = 'DDR5'; 35 = 'LPDDR5' }
 $dup = @($mem | Group-Object { "$($_.SerialNumber)".Trim() } | Where-Object Count -gt 1 | ForEach-Object Name)
-$solderedGB = 0; $slotGB = 0
+$IsDesktop = (-not $IsLaptop) -and @($encl.ChassisTypes | Where-Object { $_ -in 3,4,5,6,7,15,16,17,23,24 }).Count -gt 0
+$solderedGB = 0; $slotGB = 0; $unknownGB = 0; $guess = $false
 foreach ($m in $mem) {
     $sn = "$($m.SerialNumber)".Trim(); $t = [int]$m.SMBIOSMemoryType
     $type = if ($mt.ContainsKey($t)) { $mt[$t] } else { "код $t" }
     $gb = [math]::Round($m.Capacity / 1GB)
-    if ($t -in 29, 30, 35)                      { $v = 'распайка (LPDDR)' }
-    elseif ($sn -match '^0*$' -or $sn -in $dup) { $v = 'распайка' }
-    elseif ($m.FormFactor -eq 12)               { $v = 'съёмная плашка' }
-    else                                        { $v = 'скорее распайка' }
-    if ($v -eq 'съёмная плашка') { $slotGB += $gb } else { $solderedGB += $gb }
+    $v = Get-MemVerdict -IsLpddr ($t -in 29, 30, 35) -PartNumber "$($m.PartNumber)" -Serial $sn `
+                        -SerialDup ($sn -in $dup) -IsDimm ($m.FormFactor -in 8, 12) -IsDesktop $IsDesktop
+    switch ($v.Kind) { 'sold' { $solderedGB += $gb } 'slot' { $slotGB += $gb } default { $unknownGB += $gb } }
+    if (-not $v.Sure) { $guess = $true }
     $label = ("{0} {1}" -f $m.BankLabel, $m.DeviceLocator).Trim()
-    Line $label ("{0} ГБ {1}-{2} | {3} {4} | {5}" -f $gb, $type, $m.ConfiguredClockSpeed, $m.Manufacturer, "$($m.PartNumber)".Trim(), $v)
+    Line $label ("{0} ГБ {1}-{2} | {3} {4} | {5}" -f $gb, $type, $m.ConfiguredClockSpeed, $m.Manufacturer, "$($m.PartNumber)".Trim(), $v.Text)
 }
-Line 'Итого' ("распаяно {0} ГБ, в слотах {1} ГБ | слотов по BIOS: {2}, макс. {3} ГБ" -f $solderedGB, $slotGB, $memArr.MemoryDevices, [math]::Round($memArr.MaxCapacity / 1MB))
+$memSum = "распаяно $solderedGB ГБ, в слотах $slotGB ГБ"
+if ($unknownGB) { $memSum += ", не определено $unknownGB ГБ" }
+if ($guess)     { $memSum += ' (часть — оценка)' }
+Line 'Итого' ("{0} | слотов по BIOS: {1}, макс. {2} ГБ" -f $memSum, $memArr.MemoryDevices, [math]::Round($memArr.MaxCapacity / 1MB))
 $Report['ОЗУ ГБ'] = $totalGB
-$Report['ОЗУ распаяно/слоты'] = "$solderedGB/$slotGB"
+$Report['ОЗУ распаяно/слоты'] = "$solderedGB/$slotGB$(if ($unknownGB) { "/?$unknownGB" })$(if ($guess) { ' (оценка)' })"
 
 # ================= диски =================
 Section 'Диски'

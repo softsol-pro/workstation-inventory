@@ -13,7 +13,7 @@
 # Нужен bash 4+. Всё необязательное (dmidecode, smartctl, edid-decode, jq/python3, lpstat, upsc,
 # nmcli, realm, ...) проверяется на наличие; если чего-то нет — в выводе будет «нет данных».
 
-VERSION='1.0.0'
+VERSION='1.0.1'
 
 # ================= сроки поддержки дистрибутивов =================
 # ОБНОВЛЯТЬ РАЗ В ГОД — когда выходит новая LTS Ubuntu / новый Debian.
@@ -169,6 +169,30 @@ write_json() {
     } > "$f"
 }
 
+# ================= память: распайка или слот =================
+# Поля «распаяно» в SMBIOS нет, поэтому решаем по признакам — первый сработавший решает.
+# Part Number с номером микросхемы DRAM (а не модуля) — память распаяна на плате
+CHIP_PN='^(K4[A-Z0-9]|H5[A-Z]|H9[A-Z]|HKN|MT(40|41|46|52|53|60|61|62)[A-Z]|NT5|NT6|CXDB)'
+# Part Number готового модуля (Samsung, SK Hynix, Micron, Kingston, Crucial, G.Skill, Corsair, ADATA, HyperX, Team, Silicon Power, Ramaxel)
+MODULE_PN='^(M3[79][0-9]|M47[0-9]|HMA|HMT|HMCG|HMAA|MTA|MTC|KVR|KF[0-9]|KCP|KHX|KTD|KTH|KTL|ACR[0-9]|CT[0-9]|BL[0-9]|F[345]-|CM[A-Z]|AD[45]|AX[45]|HX[45]|TF[0-9]|TED|SP0|RMSA|RMUA|99U5)'
+# mem_verdict тип part_number серийник серийник_повторяется(0/1) форм-фактор настольный(0/1) → MV_TEXT, MV_KIND (sold/slot/unknown), MV_SURE (0/1)
+mem_verdict() {
+    local pn sn=$3
+    pn=$(trim "${2^^}")
+    case $sn in 'Not Specified'|Unknown|None|'[Empty]') sn='' ;; esac
+    MV_SURE=1
+    if [[ $1 == LPDDR* ]]; then MV_TEXT='распайка (LPDDR)'; MV_KIND=sold
+    elif [[ $pn =~ $CHIP_PN ]]; then MV_TEXT='распайка (номер микросхемы)'; MV_KIND=sold
+    elif [[ $pn =~ $MODULE_PN ]]; then MV_TEXT='съёмная плашка (номер модуля)'; MV_KIND=slot
+    elif [ "$6" = 1 ]; then MV_TEXT='съёмная плашка (настольный ПК)'; MV_KIND=slot
+    else
+        MV_SURE=0
+        if [[ $sn =~ ^0*$ ]] || [ "$4" = 1 ]; then MV_TEXT='скорее распайка (серийник пустой / повторяется)'; MV_KIND=sold
+        elif [ "$5" = DIMM ] || [ "$5" = SODIMM ]; then MV_TEXT='скорее съёмная (форм-фактор DIMM / SODIMM)'; MV_KIND=slot
+        else MV_TEXT='не определить'; MV_KIND=unknown; fi
+    fi
+}
+
 # ================= EDID =================
 # печатает: производитель|имя|серийник|год
 edid_info() {
@@ -260,10 +284,11 @@ main() {
     else note 'Без конфига — домен, VPN и антивирус проверяются без сравнения с ожидаемыми значениями'; fi
 
     # ================= общее =================
-    local vendor pname pver serial chassis model is_laptop=0 up up_d up_h st
+    local vendor pname pver serial chassis model is_laptop=0 is_desktop=0 up up_d up_h st
     vendor=$(dmi sys_vendor); pname=$(dmi product_name); pver=$(dmi product_version)
     chassis=$(dmi chassis_type)
     if [[ " 8 9 10 11 12 14 18 21 30 31 32 " == *" ${chassis:-x} "* ]]; then is_laptop=1; fi
+    if [[ " 3 4 5 6 7 15 16 17 23 24 " == *" ${chassis:-x} "* ]]; then is_desktop=1; fi
     model=$pname
     if [[ ${vendor^^} == *LENOVO* ]] && [ -n "$pver" ]; then model="$pver ($pname)"; fi
     if [ -r /sys/class/dmi/id/product_serial ]; then serial=$(dmi product_serial)
@@ -319,7 +344,7 @@ main() {
             n && /^\t[^\t]/ { k = $1; sub(/^\t/, "", k); v = $2; sub(/[ \t]+$/, "", v); r[k] = v }
             END { out() }')
     fi
-    local m size unit gbm mtype speed mfr part sn ff bank loc v sold=0 slot=0 sum_gb=0 slots_bios='' max_bios=''
+    local m size unit gbm mtype speed mfr part sn ff bank loc v sold=0 slot=0 unk=0 guess=0 sum_gb=0 slots_bios='' max_bios=''
     local -a good=()
     for m in "${mods[@]}"; do
         IFS=$'\t' read -r size mtype speed mfr part sn ff bank loc <<< "$m"
@@ -340,19 +365,20 @@ main() {
     dupsn=$(printf '%s\n' "${sns[@]}" | sort | uniq -d)
     for m in "${good[@]}"; do
         IFS=$'\t' read -r gbm mtype speed mfr part sn ff bank loc <<< "$m"
-        case $sn in 'Not Specified'|Unknown|None|'[Empty]') sn='' ;; esac
-        if [[ $mtype == LPDDR* ]]; then v='распайка (LPDDR)'
-        elif [[ $sn =~ ^0*$ ]] || { [ -n "$dupsn" ] && grep -qxF -- "$sn" <<< "$dupsn"; }; then v='распайка'
-        elif [ "$ff" = SODIMM ]; then v='съёмная плашка'
-        else v='скорее распайка'; fi
-        if [ "$v" = 'съёмная плашка' ]; then slot=$((slot + gbm)); else sold=$((sold + gbm)); fi
-        line "$(trim "$bank $loc")" "$gbm ГБ $mtype-${speed%% *} | $mfr $part | $v"
+        v=0; [ -n "$dupsn" ] && grep -qxF -- "$sn" <<< "$dupsn" && v=1
+        mem_verdict "$mtype" "$part" "$sn" "$v" "$ff" "$is_desktop"
+        case $MV_KIND in sold) sold=$((sold + gbm)) ;; slot) slot=$((slot + gbm)) ;; *) unk=$((unk + gbm)) ;; esac
+        [ "$MV_SURE" = 1 ] || guess=1
+        line "$(trim "$bank $loc")" "$gbm ГБ $mtype-${speed%% *} | $mfr $part | $MV_TEXT"
     done
     if [ "${#good[@]}" -gt 0 ]; then
         slots_bios=$(dmidecode -t 16 2>/dev/null | awk -F': ' '/Number Of Devices/ { s += $2 } END { print s }')
         max_bios=$(dmidecode -t 16 2>/dev/null | awk -F': ' '/Maximum Capacity/ { print $2; exit }')
-        line 'Итого' "распаяно $sold ГБ, в слотах $slot ГБ | слотов по BIOS: ${slots_bios:-?}, макс. ${max_bios:-?}"
-        REPORT['ОЗУ распаяно/слоты']="$sold/$slot"
+        v="распаяно $sold ГБ, в слотах $slot ГБ"
+        [ "$unk" -gt 0 ] && v+=", не определено $unk ГБ"
+        [ "$guess" = 1 ] && v+=' (часть — оценка)'
+        line 'Итого' "$v | слотов по BIOS: ${slots_bios:-?}, макс. ${max_bios:-?}"
+        REPORT['ОЗУ распаяно/слоты']="$sold/$slot$([ "$unk" -gt 0 ] && echo "/?$unk")$([ "$guess" = 1 ] && echo ' (оценка)')"
     elif [ "$IS_ROOT" != 1 ]; then
         line 'Модули' 'нет данных (нужен root для dmidecode)'; incomplete 'модули памяти'
     elif ! have dmidecode; then
