@@ -22,7 +22,7 @@ jobs:
         shell: powershell
         run: |
           if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) { Install-Module PSScriptAnalyzer -Scope CurrentUser -Force }
-          $r = Invoke-ScriptAnalyzer -Path windows/inventory.ps1, tests/check-windows.ps1 -Settings ./PSScriptAnalyzerSettings.psd1
+          $r = @('windows/inventory.ps1', 'tests/check-windows.ps1') | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Settings ./PSScriptAnalyzerSettings.psd1 }
           $r | Format-Table ScriptName, Severity, Line, RuleName, Message -AutoSize -Wrap
           if ($r) { exit 1 }
 
