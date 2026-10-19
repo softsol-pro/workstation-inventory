@@ -13,7 +13,7 @@
 # Нужен bash 4+. Всё необязательное (dmidecode, smartctl, edid-decode, jq/python3, lpstat, upsc,
 # nmcli, realm, ...) проверяется на наличие; если чего-то нет — в выводе будет «нет данных».
 
-VERSION='1.0.1'
+VERSION='1.0.2'
 
 # ================= сроки поддержки дистрибутивов =================
 # ОБНОВЛЯТЬ РАЗ В ГОД — когда выходит новая LTS Ubuntu / новый Debian.
@@ -64,6 +64,7 @@ err_msg() { printf '%s%s%s\n' "$C_BAD" "$1" "$C_0"; }
 incomplete() { local x; for x in "${INCOMPLETE[@]}"; do [ "$x" = "$1" ] && return; done; INCOMPLETE+=("$1"); }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+hide() { if [ "${PERSONAL:-0}" = 1 ]; then printf '%s' 'скрыто (личный ПК)'; else printf '%s' "$1"; fi; }
 trim() { local s=$1; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
 readf() { [ -r "$1" ] && trim "$(tr -d '\0' < "$1" 2>/dev/null)"; }
 dmi() { readf "/sys/class/dmi/id/$1"; }
@@ -89,7 +90,8 @@ svc_state() {  # active / inactive / failed / ? (нет systemd)
 
 usage() {
     cat <<'EOF'
-Использование: inventory.sh [--config путь|https-URL] [--csv файл] [--json файл] [--skip-updates]
+Использование: inventory.sh [--owner company|personal] [--config путь|https-URL] [--csv файл] [--json файл] [--skip-updates]
+  --owner         чей компьютер: company или personal; если не указан, скрипт спросит (без терминала — считает личным)
   --config        конфиг организации (JSON); без него домен/VPN/антивирус только показываются, без сравнения
   --csv           дописать строку по этому ПК в общую таблицу (разделитель ";", UTF-8 с BOM)
   --json          сохранить полный отчёт в JSON
@@ -160,7 +162,7 @@ write_json() {
     done
     {
         printf '{\n'
-        printf '  "version": %s,\n  "os": "linux",\n  "generated": %s,\n' "$(json_s "$VERSION")" "$(json_s "$(date +%Y-%m-%dT%H:%M:%S)")"
+        printf '  "version": %s,\n  "os": "linux",\n  "owner": %s,\n  "generated": %s,\n' "$(json_s "$VERSION")" "$(json_s "$OWNER")" "$(json_s "$(date +%Y-%m-%dT%H:%M:%S)")"
         printf '  "isAdmin": %s,\n  "configUsed": %s,\n' "$adm" "$cfg"
         printf '  "summary": {\n%s\n  },\n' "$sum"
         printf '  "issues": %s,\n' "$(json_arr "${ISSUES[@]}")"
@@ -232,7 +234,7 @@ main() {
         if locale -a 2>/dev/null | grep -qix "$l"; then export LC_ALL=$l; break; fi
     done
 
-    CONFIG=''; CSV=''; JSON=''; SKIP_UPD=0
+    OWNER=''; CONFIG=''; CSV=''; JSON=''; SKIP_UPD=0
     while [ $# -gt 0 ]; do
         case $1 in
             --config)       CONFIG=${2:-}; shift; [ $# -gt 0 ] && shift ;;
@@ -241,6 +243,8 @@ main() {
             --csv=*)        CSV=${1#*=}; shift ;;
             --json)         JSON=${2:-}; shift; [ $# -gt 0 ] && shift ;;
             --json=*)       JSON=${1#*=}; shift ;;
+            --owner)        OWNER=${2:-}; shift; [ $# -gt 0 ] && shift ;;
+            --owner=*)      OWNER=${1#*=}; shift ;;
             --skip-updates) SKIP_UPD=1; shift ;;
             -h|--help)      usage; return 0 ;;
             *)              err_msg "Неизвестный параметр: $1"; usage; return 2 ;;
@@ -274,12 +278,44 @@ main() {
     fi
     HOST=$(hostname 2>/dev/null || readf /proc/sys/kernel/hostname)
 
-    REPORT['Дата']=$(date '+%Y-%m-%d %H:%M')
-    REPORT['ПК']=$HOST
+    # ================= чей компьютер =================
+    # Личный ПК: железо, ОС, обновления и защита — собираем; имя ПК, пользователь, серийники, учётки,
+    # имя домена, VPN-ключи и IP-адреса — нет (в консоли, CSV и JSON вместо них «скрыто»)
+    local owner_note=''
+    case ${OWNER,,} in
+        company|компании|1) OWNER=company ;;
+        personal|личный|2) OWNER=personal ;;
+        '') ;;
+        *) err_msg "Неизвестное значение --owner '$OWNER' (нужно company или personal)"; OWNER='' ;;
+    esac
+    if [ -z "$OWNER" ]; then
+        # stdin при curl | bash занят самим скриптом, поэтому спрашиваем через терминал
+        if { : < /dev/tty; } 2>/dev/null; then
+            for _ in 1 2 3; do
+                printf '\nЭто компьютер компании или личный? 1 — компании, 2 — личный: ' > /dev/tty
+                IFS= read -r l < /dev/tty || break
+                case ${l,,} in
+                    1|к|компании|company) OWNER=company; break ;;
+                    2|л|личный|personal) OWNER=personal; break ;;
+                esac
+            done
+        fi
+        if [ -z "$OWNER" ]; then
+            OWNER=personal
+            owner_note='Не удалось спросить, чей это ПК, — считаю личным. Для учёта ПК компании запустите с --owner company'
+        fi
+    fi
+    PERSONAL=0; [ "$OWNER" = personal ] && PERSONAL=1
 
-    printf '\n%sИнвентаризация %s — %s (inventory.sh %s)%s\n' "$C_TITLE" "$HOST" "$(date '+%d.%m.%Y %H:%M')" "$VERSION" "$C_0"
+    REPORT['Дата']=$(date '+%Y-%m-%d %H:%M')
+    REPORT['ПК']=$(hide "$HOST")
+
+    printf '\n%sИнвентаризация %s — %s (inventory.sh %s)%s\n' "$C_TITLE" "$([ "$PERSONAL" = 1 ] && echo 'личного ПК' || echo "$HOST")" "$(date '+%d.%m.%Y %H:%M')" "$VERSION" "$C_0"
+    [ -n "$owner_note" ] && warn_msg "$owner_note"
+    if [ "$PERSONAL" = 1 ]; then note 'Личный ПК: имя ПК, пользователь, серийники, учётки, домен, VPN-ключи и IP-адреса не собираются'
+    else note 'Компьютер компании: собирается полный отчёт'; fi
     [ "$IS_ROOT" = 1 ] || warn_msg 'Запущено без root — часть проверок будет неполной'
-    if [ "$CFG_LOADED" = 1 ]; then note "Конфиг: $CONFIG (разобран через $CFG_TOOL)"
+    if [ "$CFG_LOADED" = 1 ]; then note "Конфиг: $([ "$PERSONAL" = 1 ] && echo 'загружен' || echo "$CONFIG") (разобран через $CFG_TOOL)"
     elif [ -n "$CONFIG" ]; then warn_msg 'Конфиг не загружен — домен, VPN и антивирус проверяются без сравнения с ожидаемыми значениями'
     else note 'Без конфига — домен, VPN и антивирус проверяются без сравнения с ожидаемыми значениями'; fi
 
@@ -298,20 +334,22 @@ main() {
     up_d=$((up / 86400)); up_h=$(((up % 86400) / 3600))
 
     section 'Общее'
-    line 'Компьютер' "$HOST"
-    line 'Пользователь' "$RUSER"
+    line 'Чей компьютер' "$([ "$PERSONAL" = 1 ] && echo личный || echo компании)"
+    line 'Компьютер' "$(hide "$HOST")"
+    line 'Пользователь' "$(hide "$RUSER")"
     line 'Производитель' "${vendor:-нет данных}"
     line 'Модель' "${model:-нет данных}"
-    line 'Серийный номер' "${serial:-нет данных}"
+    line 'Серийный номер' "$(hide "${serial:-нет данных}")"
     if [ -z "$chassis" ]; then line 'Тип' 'нет данных'
     elif [ "$is_laptop" = 1 ]; then line 'Тип' 'Ноутбук'
     else line 'Тип' 'Настольный / прочее'; fi
     if [ "$up_d" -ge 14 ]; then st=warn; else st=ok; fi
     line 'Без перезагрузки' "$up_d дн. $up_h ч." "$st" "$([ "$st" = warn ] && echo 'Не перезагружался больше 2 недель')"
-    REPORT['Пользователь']=$RUSER
+    REPORT['Пользователь']=$(hide "$RUSER")
     REPORT['Модель']=$(trim "$vendor $model")
-    REPORT['Серийник']=$serial
+    REPORT['Серийник']=$(hide "$serial")
     if [ "$is_laptop" = 1 ]; then REPORT['Тип']='Ноутбук'; else REPORT['Тип']='ПК'; fi
+    REPORT['Тип']+=", $([ "$PERSONAL" = 1 ] && echo личный || echo компании)"
 
     # ================= процессор =================
     section 'Процессор'
@@ -447,7 +485,7 @@ main() {
         conn=${e%/edid}; conn=${conn##*/}; conn=${conn#card[0-9]-}
         [ -z "$mname" ] && mname='(встроенный / без имени)'
         if [ -n "$mfr" ] && [[ $mname == "$mfr"* ]]; then disp=$mname; else disp=$(trim "$mfr $mname"); fi
-        line "Монитор $i" "$disp | S/N ${msn:-?} | $myear г. | $conn"
+        line "Монитор $i" "$disp | S/N $(hide "${msn:-?}") | $myear г. | $conn"
         mons+=("$disp")
     done
     [ "$i" = 0 ] && line 'Мониторы' 'не определены'
@@ -462,8 +500,9 @@ main() {
             case $uri in
                 usb:*) how=USB ;;
                 implicitclass:*|dnssd:*) how='по сети (автообнаружение)' ;;
-                ipp:*|ipps:*|http:*|https:*|socket:*|lpd:*|smb:*) how="по сети (${uri%%:*} ${uri#*://})" ;;
-                *) how=$uri ;;
+                ipp:*|ipps:*|http:*|https:*|socket:*|lpd:*|smb:*)
+                    if [ "$PERSONAL" = 1 ]; then how="по сети (${uri%%:*})"; else how="по сети (${uri%%:*} ${uri#*://})"; fi ;;
+                *) if [ "$PERSONAL" = 1 ]; then how='другое подключение'; else how=$uri; fi ;;
             esac
             line 'Принтер / МФУ' "$pn | $how$([ "$pn" = "$pdef" ] && echo ' | по умолчанию')"
             prns+=("$pn")
@@ -687,7 +726,8 @@ main() {
     for g in sudo wheel admin; do
         l=$(getent group "$g" 2>/dev/null) || continue
         gm=$(cut -d: -f4 <<< "$l")
-        line "Группа $g" "${gm:-пусто}"
+        if [ "$PERSONAL" = 1 ] && [ -n "$gm" ]; then line "Группа $g" "учёток: $(tr ',' '\n' <<< "$gm" | grep -c .) (имена скрыты)"
+        else line "Группа $g" "${gm:-пусто}"; fi
     done
     if [ "$RUSER" = root ]; then
         line 'Пользователь — админ?' 'запущено от root, обычный пользователь не определён'
@@ -701,7 +741,8 @@ main() {
             method='по группам sudo/wheel/admin, sudoers не проверен'
             incomplete 'права sudo (sudoers)'
         fi
-        if [ "$uadm" = 1 ]; then line 'Пользователь — админ?' "ДА, $RUSER ($method)" bad "Пользователь $RUSER — администратор (sudo)"
+        l=$RUSER; [ "$PERSONAL" = 1 ] && l='текущий пользователь'
+        if [ "$uadm" = 1 ]; then line 'Пользователь — админ?' "ДА, $l ($method)" bad "Пользователь $l — администратор (sudo)"
         else line 'Пользователь — админ?' "нет ($method)" ok; fi
     fi
     case $uadm in 1) REPORT['Польз. админ']='ДА' ;; 0) REPORT['Польз. админ']='нет' ;; *) REPORT['Польз. админ']='?' ;; esac
@@ -751,7 +792,7 @@ main() {
     else [ -n "$dom" ] && in_corp=1; fi
 
     if [ "$in_corp" = 1 ]; then
-        line 'Домен' "в домене $dom ($dom_how)" "$([ -n "$CORP_DOMAIN" ] && echo ok)"
+        line 'Домен' "в домене $(hide "$dom") ($dom_how)" "$([ -n "$CORP_DOMAIN" ] && echo ok)"
         if [ "${#DCS[@]}" -eq 0 ]; then line 'Доверие с доменом' 'не проверено — в конфиге не заданы контроллеры (dcs)'
         elif [ "${#dcok[@]}" -eq 0 ]; then line 'Доверие с доменом' 'не проверено — DC недоступны'
         elif [ "$IS_ROOT" != 1 ]; then line 'Доверие с доменом' 'не проверено (нужен root)'; incomplete 'доверие с доменом'
@@ -765,7 +806,7 @@ main() {
                 *) line 'Доверие с доменом' 'не проверено (нет adcli / wbinfo)' ;;
             esac
         fi
-    elif [ -n "$dom" ]; then line 'Домен' "в ДРУГОМ домене: $dom" warn 'Компьютер в чужом домене'
+    elif [ -n "$dom" ]; then line 'Домен' "в ДРУГОМ домене: $(hide "$dom")" warn 'Компьютер в чужом домене'
     else line 'Домен' 'не в домене' "$([ -n "$CORP_DOMAIN" ] && echo warn)"; fi
 
     if [ "$RUSER" = root ] || grep -q "^${RUSER}:" /etc/passwd 2>/dev/null; then line 'Учётка пользователя' 'локальная'
@@ -800,8 +841,13 @@ main() {
             kuser=$(trim "${BASH_REMATCH[1]}")
             if [[ ${owner,,} != "${kuser,,}"* ]] && [[ ${kuser,,} != "${owner,,}"* ]]; then foreign=$kuser; fi
         fi
-        line "Ключ ($owner)" "${fpath##*/} → ${remotes:-?}$has_route${foreign:+ | ЧУЖОЙ КЛЮЧ ($foreign)}" "$([ -n "$foreign" ] && echo warn)" \
-            "$([ -n "$foreign" ] && echo "Чужой VPN-ключ у $owner: ${fpath##*/}")"
+        if [ "$PERSONAL" = 1 ]; then
+            line 'Ключ VPN' "$([ "$owner" = 'общий' ] && echo общий || echo 'в профиле пользователя') (имя и сервер скрыты)$has_route${foreign:+ | ЧУЖОЙ КЛЮЧ}" \
+                "$([ -n "$foreign" ] && echo warn)" "$([ -n "$foreign" ] && echo 'Чужой VPN-ключ в профиле пользователя')"
+        else
+            line "Ключ ($owner)" "${fpath##*/} → ${remotes:-?}$has_route${foreign:+ | ЧУЖОЙ КЛЮЧ ($foreign)}" "$([ -n "$foreign" ] && echo warn)" \
+                "$([ -n "$foreign" ] && echo "Чужой VPN-ключ у $owner: ${fpath##*/}")"
+        fi
     done
 
     if have nmcli; then
@@ -815,8 +861,13 @@ main() {
                 kuser=$(trim "${BASH_REMATCH[1]}")
                 if [[ ${RUSER,,} != "${kuser,,}"* ]] && [[ ${kuser,,} != "${RUSER,,}"* ]]; then foreign=$kuser; fi
             fi
-            line 'Профиль NetworkManager' "$nname ($nt)${foreign:+ | ЧУЖОЙ КЛЮЧ ($foreign)}" "$([ -n "$foreign" ] && echo warn)" \
-                "$([ -n "$foreign" ] && echo "Чужой VPN-профиль у $RUSER: $nname")"
+            if [ "$PERSONAL" = 1 ]; then
+                line 'Профиль NetworkManager' "$nt (имя скрыто)${foreign:+ | ЧУЖОЙ КЛЮЧ}" "$([ -n "$foreign" ] && echo warn)" \
+                    "$([ -n "$foreign" ] && echo 'Чужой VPN-профиль у пользователя')"
+            else
+                line 'Профиль NetworkManager' "$nname ($nt)${foreign:+ | ЧУЖОЙ КЛЮЧ ($foreign)}" "$([ -n "$foreign" ] && echo warn)" \
+                    "$([ -n "$foreign" ] && echo "Чужой VPN-профиль у $RUSER: $nname")"
+            fi
             nm_vpn+=("$nname")
         done < <(nmcli -t -f NAME,TYPE connection show 2>/dev/null)
     fi
@@ -827,12 +878,12 @@ main() {
     else addrs=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk 'NF { print "?", $1 }'); fi
     if [ -n "$VPN_PREFIX" ]; then
         while read -r ifc ip; do [[ $ip == "$VPN_PREFIX"* ]] && { tun="$ifc ${ip%/*}"; break; }; done <<< "$addrs"
-        if [ -n "$tun" ]; then line 'VPN-туннель сейчас' "поднят, адрес ${tun#* } (${tun%% *})" ok
+        if [ -n "$tun" ]; then line 'VPN-туннель сейчас' "поднят, адрес $(hide "${tun#* }") (${tun%% *})" ok
         else line 'VPN-туннель сейчас' 'не поднят'; fi
     else
         nst=0
         while read -r ifc ip; do
-            case $ifc in tun*|tap*|wg*|ppp*) line 'VPN-интерфейс поднят' "$ifc: ${ip%/*}"; nst=1 ;; esac
+            case $ifc in tun*|tap*|wg*|ppp*) line 'VPN-интерфейс поднят' "$ifc: $(hide "${ip%/*}")"; nst=1 ;; esac
         done <<< "$addrs"
         [ "$nst" = 0 ] && line 'VPN-туннель сейчас' 'не поднят (интерфейсов tun/tap/wg нет)'
     fi
@@ -864,11 +915,11 @@ main() {
 
     if [ -n "$CSV" ]; then
         if write_csv "$CSV" 2>/dev/null; then note "
-  Строка добавлена в $CSV"; else err_msg "
+  Строка добавлена в $([ "$PERSONAL" = 1 ] && echo "${CSV##*/}" || echo "$CSV")"; else err_msg "
   Не удалось записать CSV: $CSV"; fi
     fi
     if [ -n "$JSON" ]; then
-        if write_json "$JSON" 2>/dev/null; then note "  Отчёт сохранён в $JSON"; else err_msg "  Не удалось записать JSON: $JSON"; fi
+        if write_json "$JSON" 2>/dev/null; then note "  Отчёт сохранён в $([ "$PERSONAL" = 1 ] && echo "${JSON##*/}" || echo "$JSON")"; else err_msg "  Не удалось записать JSON: $JSON"; fi
     fi
     echo
 }

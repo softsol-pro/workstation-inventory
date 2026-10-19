@@ -8,10 +8,14 @@
     powershell -ExecutionPolicy Bypass -File .\inventory.ps1 -SkipWU
     powershell -ExecutionPolicy Bypass -File .\inventory.ps1 -Config \\server\share\config.json -CsvPath \\server\share\inventory.csv
     powershell -ExecutionPolicy Bypass -File .\inventory.ps1 -JsonPath .\report.json
+    powershell -ExecutionPolicy Bypass -File .\inventory.ps1 -Owner company   # не спрашивать, чей ПК (company / personal)
+  В начале скрипт спрашивает, чей это компьютер. Для личного ПК имя ПК, пользователь, серийники, учётки,
+  имя домена, VPN-ключи и IP-адреса не собираются.
   Запуск одной строкой с GitHub — см. README.md
 #>
 [CmdletBinding()]
 param(
+    [string]$Owner,     # company / personal — чей компьютер; если не указан, скрипт спросит (без консоли — считает личным)
     [string]$Config,    # конфиг организации: путь (локальный / UNC) или https-URL; без него домен/VPN/антивирус только показываются, без сравнения
     [string]$CsvPath,   # дописать строку по этому ПК в общую таблицу (разделитель ";", открывается в Excel)
     [string]$JsonPath,  # сохранить полный отчёт в JSON
@@ -19,7 +23,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
-$ScriptVersion = '1.0.1'
+$ScriptVersion = '1.0.2'
 
 # ================= сроки поддержки Windows =================
 # ОБНОВЛЯТЬ РАЗ В ГОД — когда выходит новая версия Windows 11 (обычно осенью):
@@ -128,6 +132,26 @@ if ($KeyPattern) {
 $Me      = [Security.Principal.WindowsIdentity]::GetCurrent()
 $IsAdmin = ([Security.Principal.WindowsPrincipal]$Me).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
+# ================= чей компьютер =================
+# Личный ПК: железо, ОС, обновления и защита — собираем; имя ПК, пользователь, серийники, учётки,
+# имя домена, VPN-ключи и IP-адреса — нет (в консоли, CSV и JSON вместо них «скрыто»)
+$Owner = "$Owner".Trim().ToLower(); $OwnerNote = $null
+if ($Owner -in 'company', 'компании', '1')    { $Owner = 'company' }
+elseif ($Owner -in 'personal', 'личный', '2') { $Owner = 'personal' }
+elseif ($Owner) { Write-Host "Неизвестное значение -Owner '$Owner' (нужно company или personal)" -ForegroundColor Red; $Owner = '' }
+if (-not $Owner) {
+    $canAsk = [Environment]::UserInteractive -and -not ([Environment]::GetCommandLineArgs() | Where-Object { $_ -match '^-NonI' })
+    for ($i = 0; $canAsk -and -not $Owner -and $i -lt 3; $i++) {
+        $a = ''
+        try { $a = "$(Read-Host "`nЭто компьютер компании или личный? 1 — компании, 2 — личный")".Trim().ToLower() } catch { $canAsk = $false }
+        if ($a -in '1', 'к', 'компании', 'company')    { $Owner = 'company' }
+        elseif ($a -in '2', 'л', 'личный', 'personal') { $Owner = 'personal' }
+    }
+    if (-not $Owner) { $Owner = 'personal'; $OwnerNote = 'Не удалось спросить, чей это ПК, — считаю личным. Для учёта ПК компании запустите с -Owner company' }
+}
+$IsPersonal = $Owner -eq 'personal'
+function Hide($Value) { if ($IsPersonal) { 'скрыто (личный ПК)' } else { $Value } }
+
 # ================= общее =================
 $cs   = Get-CimInstance Win32_ComputerSystem
 $bios = Get-CimInstance Win32_BIOS
@@ -137,25 +161,30 @@ $IsLaptop = @($encl.ChassisTypes | Where-Object { $_ -in 8,9,10,11,12,14,18,21,3
 $Model = if ($cs.Manufacturer -match 'LENOVO' -and $cs.SystemFamily) { "$($cs.SystemFamily) ($($cs.Model))" } else { $cs.Model }
 $Uptime = (Get-Date) - $os.LastBootUpTime
 
-Write-Host "`nИнвентаризация $env:COMPUTERNAME — $(Get-Date -Format 'dd.MM.yyyy HH:mm') (inventory.ps1 $ScriptVersion)" -ForegroundColor White
+Write-Host "`nИнвентаризация $(if ($IsPersonal) { 'личного ПК' } else { $env:COMPUTERNAME }) — $(Get-Date -Format 'dd.MM.yyyy HH:mm') (inventory.ps1 $ScriptVersion)" -ForegroundColor White
+if ($OwnerNote) { Write-Host $OwnerNote -ForegroundColor DarkYellow }
+if ($IsPersonal) { Write-Host 'Личный ПК: имя ПК, пользователь, серийники, учётки, домен, VPN-ключи и IP-адреса не собираются' -ForegroundColor DarkGray }
+else             { Write-Host 'Компьютер компании: собирается полный отчёт' -ForegroundColor DarkGray }
 if (-not $IsAdmin) { Write-Host 'Запущено без прав администратора — часть проверок будет неполной' -ForegroundColor DarkYellow }
-if ($Cfg)        { Write-Host "Конфиг: $Config" -ForegroundColor DarkGray }
+if ($Cfg)        { Write-Host "Конфиг: $(if ($IsPersonal) { 'загружен' } else { $Config })" -ForegroundColor DarkGray }
 elseif ($Config) { Write-Host 'Конфиг не загружен — домен, VPN и антивирус проверяются без сравнения с ожидаемыми значениями' -ForegroundColor DarkYellow }
 else             { Write-Host 'Без конфига — домен, VPN и антивирус проверяются без сравнения с ожидаемыми значениями' -ForegroundColor DarkGray }
 
 Section 'Общее'
-Line 'Компьютер'      $env:COMPUTERNAME
-Line 'Пользователь'   $cs.UserName
+Line 'Чей компьютер'   $(if ($IsPersonal) { 'личный' } else { 'компании' })
+Line 'Компьютер'      (Hide $env:COMPUTERNAME)
+Line 'Пользователь'   (Hide $cs.UserName)
 Line 'Производитель'  $cs.Manufacturer
 Line 'Модель'         $Model
-Line 'Серийный номер' $bios.SerialNumber
+Line 'Серийный номер' (Hide $bios.SerialNumber)
 Line 'Тип'            $(if ($IsLaptop) { 'Ноутбук' } else { 'Настольный / прочее' })
 $upSt = if ($Uptime.TotalDays -gt 14) { 'warn' } else { 'ok' }
 Line 'Без перезагрузки' ('{0} дн. {1} ч.' -f [int][math]::Floor($Uptime.TotalDays), $Uptime.Hours) $upSt $(if ($upSt -eq 'warn') { 'Не перезагружался больше 2 недель' })
-$Report['Пользователь'] = $cs.UserName
+$Report['ПК']           = Hide $env:COMPUTERNAME
+$Report['Пользователь'] = Hide $cs.UserName
 $Report['Модель']       = "$($cs.Manufacturer) $Model"
-$Report['Серийник']     = $bios.SerialNumber
-$Report['Тип']          = $(if ($IsLaptop) { 'Ноутбук' } else { 'ПК' })
+$Report['Серийник']     = Hide $bios.SerialNumber
+$Report['Тип']          = "$(if ($IsLaptop) { 'Ноутбук' } else { 'ПК' }), $(if ($IsPersonal) { 'личный' } else { 'компании' })"
 
 # ================= процессор =================
 Section 'Процессор'
@@ -237,7 +266,7 @@ foreach ($m in Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID) {
     $name = ConvertFrom-WmiString $m.UserFriendlyName; $mfr = ConvertFrom-WmiString $m.ManufacturerName; $sn = ConvertFrom-WmiString $m.SerialNumberID
     if (-not $name) { $name = '(встроенный / без имени)' }
     $disp = if ($mfr -and $name -like "$mfr*") { $name } else { "$mfr $name".Trim() }
-    Line "Монитор $i" ("{0} | S/N {1} | {2} г." -f $disp, $sn, $m.YearOfManufacture)
+    Line "Монитор $i" ("{0} | S/N {1} | {2} г." -f $disp, (Hide $sn), $m.YearOfManufacture)
     $monNames += $disp
 }
 if (-not $i) { Line 'Мониторы' 'не определены' }
@@ -249,7 +278,8 @@ foreach ($p in $prn) {
     $how = if ($p.Network) { 'сетевой (через сервер)' }
     elseif ($p.PortName -match '^USB') { 'USB' }
     elseif ($p.PortName -match '^WSD') { 'WSD (по сети)' }
-    elseif ($p.PortName -match '\d+\.\d+\.\d+\.\d+|^IP_') { "TCP/IP $($p.PortName)" }
+    elseif ($p.PortName -match '\d+\.\d+\.\d+\.\d+|^IP_') { "TCP/IP $(if (-not $IsPersonal) { $p.PortName })".Trim() }
+    elseif ($IsPersonal) { 'другой порт' }
     else { $p.PortName }
     Line 'Принтер / МФУ' ("{0} | {1}{2}" -f $p.Name, $how, $(if ($p.Default) { ' | по умолчанию' }))
 }
@@ -425,8 +455,11 @@ try {
         })
     } catch {}
 }
-Line 'Состав группы' ($admMembers -join ', ')
-if ($admDomUsers.Count) {
+if ($IsPersonal) { Line 'Состав группы' "учёток: $($admMembers.Count) (имена скрыты)" }
+else             { Line 'Состав группы' ($admMembers -join ', ') }
+if ($admDomUsers.Count -and $IsPersonal) {
+    Line 'Доменные учётки в админах' "$($admDomUsers.Count) шт. (имена скрыты)" 'warn' "Локальный админ выдан доменной учётке напрямую ($($admDomUsers.Count) шт.)"
+} elseif ($admDomUsers.Count) {
     Line 'Доменные учётки в админах' ($admDomUsers -join ', ') 'warn' "Локальный админ выдан доменной учётке напрямую: $($admDomUsers -join ', ')"
 }
 
@@ -437,7 +470,8 @@ if ($user) {
     } else {
         $userAdmin = $admMembers -contains $user; $method = 'по прямому членству, вложенные группы не проверены'
     }
-    if ($userAdmin) { Line 'Пользователь — админ?' "ДА, $user ($method)" 'bad' "Пользователь $user — локальный администратор" }
+    $uName = if ($IsPersonal) { 'текущий пользователь' } else { $user }
+    if ($userAdmin) { Line 'Пользователь — админ?' "ДА, $uName ($method)" 'bad' "Пользователь $uName — локальный администратор" }
     else            { Line 'Пользователь — админ?' "нет ($method)" 'ok' }
 } else { Line 'Пользователь — админ?' 'в системе никто не залогинен' }
 $Report['Польз. админ'] = $(if ($userAdmin) { 'ДА' } elseif ($userAdmin -eq $false) { 'нет' } else { '?' })
@@ -452,7 +486,7 @@ $dcOk = @($DCs | Where-Object { Test-Port $_ 389 })
 $inCorp = if ($CorpDomain) { $cs.PartOfDomain -and ($cs.Domain -ieq $CorpDomain) } else { [bool]$cs.PartOfDomain }
 
 if ($inCorp) {
-    Line 'Домен' "в домене $($cs.Domain)" $(if ($CorpDomain) { 'ok' })
+    Line 'Домен' "в домене $(Hide $cs.Domain)" $(if ($CorpDomain) { 'ok' })
     if (-not $DCs.Count)      { Line 'Доверие с доменом' 'не проверено — в конфиге не заданы контроллеры (dcs)' }
     elseif (-not $dcOk.Count) { Line 'Доверие с доменом' 'не проверено — DC недоступны' }
     elseif (-not $IsAdmin)    { Line 'Доверие с доменом' 'не проверено (нужны права админа)'; $Incomplete.Add('доверие с доменом') }
@@ -461,11 +495,12 @@ if ($inCorp) {
         if ($sc -eq $true)      { Line 'Доверие с доменом' 'в порядке' 'ok' }
         elseif ($sc -eq $false) { Line 'Доверие с доменом' 'НАРУШЕНО' 'bad' 'Нарушены доверительные отношения с доменом' }
     }
-} elseif ($cs.PartOfDomain) { Line 'Домен' "в ДРУГОМ домене: $($cs.Domain)" 'warn' 'Компьютер в чужом домене' }
-else                        { Line 'Домен' "не в домене (рабочая группа $($cs.Domain))" $(if ($CorpDomain) { 'warn' }) }
+} elseif ($cs.PartOfDomain) { Line 'Домен' "в ДРУГОМ домене: $(Hide $cs.Domain)" 'warn' 'Компьютер в чужом домене' }
+else                        { Line 'Домен' "не в домене (рабочая группа $(Hide $cs.Domain))" $(if ($CorpDomain) { 'warn' }) }
 
 $uDom = if ($user) { ($user -split '\\')[0] } else { '' }
-$acc  = if (-not $user) { '—' } elseif ($uDom -ieq $env:COMPUTERNAME) { 'локальная' } elseif ($uDom -eq 'AzureAD') { 'Microsoft Entra' } else { "доменная ($uDom)" }
+$acc  = if (-not $user) { '—' } elseif ($uDom -ieq $env:COMPUTERNAME) { 'локальная' } elseif ($uDom -eq 'AzureAD') { 'Microsoft Entra' }
+        elseif ($IsPersonal) { 'доменная' } else { "доменная ($uDom)" }
 Line 'Учётка пользователя' $acc
 
 $ovpnExe = @("$env:ProgramFiles\OpenVPN\bin\openvpn.exe", "${env:ProgramFiles(x86)}\OpenVPN\bin\openvpn.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -491,31 +526,36 @@ foreach ($f in $cfgs) {
     $txt      = Get-Content $f.FullName -Raw
     $remotes  = ([regex]::Matches($txt, '(?m)^\s*remote\s+(\S+)') | ForEach-Object { $_.Groups[1].Value }) -join ', '
     $hasRoute = $ExtraRouteIp -and ($txt -match [regex]::Escape($ExtraRouteIp))
-    $owner    = if ($f.FullName -match '\\Users\\([^\\]+)\\') { $Matches[1] } else { 'общий' }
+    $keyOwner    = if ($f.FullName -match '\\Users\\([^\\]+)\\') { $Matches[1] } else { 'общий' }
     $foreign  = $null
-    if ($KeyPattern -and $owner -ne 'общий' -and $f.BaseName -match $KeyPattern -and $Matches[1]) {
+    if ($KeyPattern -and $keyOwner -ne 'общий' -and $f.BaseName -match $KeyPattern -and $Matches[1]) {
         $keyUser = $Matches[1].Trim()
-        if (-not ($owner -like "$keyUser*" -or $keyUser -like "$owner*")) { $foreign = $keyUser }
+        if (-not ($keyOwner -like "$keyUser*" -or $keyUser -like "$keyOwner*")) { $foreign = $keyUser }
     }
     $kSt = if ($foreign) { 'warn' } else { $null }
-    Line "Ключ ($owner)" ("{0} → {1}{2}{3}" -f $f.Name, $remotes, $(if ($hasRoute) { " | маршрут до $ExtraRouteIp есть" }), $(if ($foreign) { " | ЧУЖОЙ КЛЮЧ ($foreign)" })) $kSt $(if ($foreign) { "Чужой VPN-ключ у $owner`: $($f.Name)" })
+    if ($IsPersonal) {
+        $where = if ($keyOwner -eq 'общий') { 'общий' } else { 'в профиле пользователя' }
+        Line 'Ключ VPN' ("{0} (имя и сервер скрыты){1}{2}" -f $where, $(if ($hasRoute) { " | маршрут до $ExtraRouteIp есть" }), $(if ($foreign) { ' | ЧУЖОЙ КЛЮЧ' })) $kSt $(if ($foreign) { 'Чужой VPN-ключ в профиле пользователя' })
+    } else {
+        Line "Ключ ($keyOwner)" ("{0} → {1}{2}{3}" -f $f.Name, $remotes, $(if ($hasRoute) { " | маршрут до $ExtraRouteIp есть" }), $(if ($foreign) { " | ЧУЖОЙ КЛЮЧ ($foreign)" })) $kSt $(if ($foreign) { "Чужой VPN-ключ у $keyOwner`: $($f.Name)" })
+    }
 }
 if (-not $cfgs.Count -and ($ovpnExe -or $connectExe)) { Line 'Ключи .ovpn' 'не найдены' 'warn' }
 
 if ($VpnPrefix) {
     $tun = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like "$VpnPrefix*" } | Select-Object -First 1
-    Line 'VPN-туннель сейчас' $(if ($tun) { "поднят, адрес $($tun.IPAddress)" } else { 'не поднят' }) $(if ($tun) { 'ok' })
+    Line 'VPN-туннель сейчас' $(if ($tun) { "поднят, адрес $(Hide $tun.IPAddress)" } else { 'не поднят' }) $(if ($tun) { 'ok' })
 } else {
     $vpnIf = @(Get-NetAdapter | Where-Object { "$($_.Status)" -eq 'Up' -and $_.InterfaceDescription -match 'TAP-Windows|Wintun|OpenVPN|WireGuard|Data Channel Offload' })
     foreach ($a in $vpnIf) {
         $ip = @(Get-NetIPAddress -InterfaceIndex $a.ifIndex -AddressFamily IPv4 | ForEach-Object { $_.IPAddress }) -join ', '
-        Line 'VPN-адаптер поднят' ("{0}: {1}" -f $a.InterfaceDescription, $ip)
+        Line 'VPN-адаптер поднят' ("{0}: {1}" -f $a.InterfaceDescription, (Hide $ip))
     }
     if (-not $vpnIf.Count) { Line 'VPN-туннель сейчас' 'не поднят (активных VPN-адаптеров нет)' }
 }
 if ($DCs.Count) {
     Line 'Контроллеры домена' $(if ($dcOk.Count) { "доступны: $($dcOk -join ', ')" } else { 'недоступны (порт 389)' }) $(if ($dcOk.Count) { 'ok' } else { 'warn' })
-} elseif ($cs.PartOfDomain -and $env:LOGONSERVER) {
+} elseif ($cs.PartOfDomain -and $env:LOGONSERVER -and -not $IsPersonal) {
     Line 'Сервер входа' ($env:LOGONSERVER -replace '^\\\\', '')
 }
 
@@ -545,7 +585,7 @@ $Report['Замечания'] = $Issues -join '; '
 if ($CsvPath) {
     try {
         [pscustomobject]$Report | Export-Csv -Path $CsvPath -Append -NoTypeInformation -Encoding UTF8 -Delimiter ';' -Force -ErrorAction Stop
-        Write-Host "`n  Строка добавлена в $CsvPath" -ForegroundColor DarkGray
+        Write-Host "`n  Строка добавлена в $(if ($IsPersonal) { Split-Path $CsvPath -Leaf } else { $CsvPath })" -ForegroundColor DarkGray
     } catch {
         Write-Host "`n  Не удалось записать CSV: $($_.Exception.Message)" -ForegroundColor Red
     }
@@ -555,6 +595,7 @@ if ($JsonPath) {
         $full = [ordered]@{
             version    = $ScriptVersion
             os         = 'windows'
+            owner      = $Owner
             generated  = Get-Date -Format 'yyyy-MM-ddTHH:mm:ss'
             isAdmin    = [bool]$IsAdmin
             configUsed = [bool]$Cfg
@@ -565,7 +606,7 @@ if ($JsonPath) {
         }
         $jp = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($JsonPath)
         [IO.File]::WriteAllText($jp, ($full | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding $false))
-        Write-Host "  Отчёт сохранён в $JsonPath" -ForegroundColor DarkGray
+        Write-Host "  Отчёт сохранён в $(if ($IsPersonal) { Split-Path $JsonPath -Leaf } else { $JsonPath })" -ForegroundColor DarkGray
     } catch {
         Write-Host "  Не удалось записать JSON: $($_.Exception.Message)" -ForegroundColor Red
     }

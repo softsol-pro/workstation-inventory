@@ -22,22 +22,42 @@
 
 Без прав администратора (root) скрипты всё равно работают, а в конце перечисляют проверки, которые остались неполными.
 
+## Компьютер компании или личный
+
+В начале скрипт спрашивает: «Это компьютер компании или личный? 1 — компании, 2 — личный».
+Чтобы не спрашивать, передайте `-Owner company` / `-Owner personal` (в Linux `--owner company` / `--owner personal`).
+
+| | Компании | Личный |
+|---|---|---|
+| Железо: производитель, модель, CPU, память, диски, мониторы, принтеры, батарея, ИБП | да | да |
+| ОС, сроки поддержки, обновления, TPM, Secure Boot, антивирус | да | да |
+| Права админа у пользователя, вход в домен, наличие VPN, замечания | да | да, без имён |
+| Имя ПК, имя пользователя, серийные номера (ПК и мониторов) | да | скрыто |
+| Состав группы администраторов, доменные учётки | имена | только количество |
+| Имя домена, сервер входа, имена и серверы VPN-ключей, IP туннеля и принтеров, пути к файлам отчёта | да | скрыто |
+
+В личном режиме вместо скрытых значений в консоли, CSV и JSON стоит «скрыто (личный ПК)». В колонке CSV `Тип` пишется «компании» или «личный».
+
+> Если спросить не получается (нет консоли, `-NonInteractive`, нет терминала у `curl | bash`), компьютер **считается личным**.
+> Поэтому при массовом запуске (GPO, планировщик, скрипт входа) всегда указывайте `-Owner company` / `--owner company`,
+> иначе в общей таблице не будет имён ПК, а скрипт входа может ждать ответа в невидимом окне.
+
 ## Быстрый запуск
 
-Однострочники берут файлы из конкретного релиза, а не из `main`. Подставьте нужную версию вместо `v1.0.1`.
+Однострочники берут файлы из конкретного релиза, а не из `main`. Подставьте нужную версию вместо `v1.0.2`.
 
 ### Windows
 
 PowerShell **от администратора**:
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.1/inventory.ps1')).TrimStart([char]0xFEFF))) -SkipWU
+[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.2/inventory.ps1')).TrimStart([char]0xFEFF))) -SkipWU
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.1/inventory.ps1')).TrimStart([char]0xFEFF))) -Config '\\server\share\inventory\config.json' -CsvPath '\\server\share\inventory\inventory.csv'
+[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.2/inventory.ps1')).TrimStart([char]0xFEFF))) -Owner company -Config '\\server\share\inventory\config.json' -CsvPath '\\server\share\inventory\inventory.csv'
 ```
 
 > Почему не `irm`: GitHub отдаёт ассеты релиза как `application/octet-stream`, и `Invoke-RestMethod` в Windows PowerShell 5.1
@@ -47,13 +67,13 @@ PowerShell **от администратора**:
 ### Linux
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.1/inventory.sh | sudo bash -s -- --skip-updates
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.2/inventory.sh | sudo bash -s -- --skip-updates
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.1/inventory.sh | sudo bash -s -- --config https://intranet.example.com/inventory/config.json --csv /mnt/share/inventory/inventory.csv
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.2/inventory.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /mnt/share/inventory/inventory.csv
 ```
 
 > Ссылки `releases/download/...` открываются без авторизации, только если репозиторий **публичный**.
@@ -66,7 +86,7 @@ curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/downloa
 ### Windows
 
 ```powershell
-$v = 'v1.0.1'; $b = "https://github.com/softsol-pro/workstation-inventory/releases/download/$v"; $f = "$env:TEMP\inventory.ps1"
+$v = 'v1.0.2'; $b = "https://github.com/softsol-pro/workstation-inventory/releases/download/$v"; $f = "$env:TEMP\inventory.ps1"
 $wc = New-Object Net.WebClient; $wc.DownloadFile("$b/inventory.ps1", $f)
 $expected = (($wc.DownloadString("$b/SHA256SUMS") -split "`n" | Where-Object { $_ -match 'inventory\.ps1' }) -split '\s+')[0]
 if ((Get-FileHash $f -Algorithm SHA256).Hash -eq $expected) { powershell -ExecutionPolicy Bypass -File $f -SkipWU } else { Write-Host 'ХЕШ НЕ СОВПАДАЕТ' -ForegroundColor Red }
@@ -75,7 +95,7 @@ if ((Get-FileHash $f -Algorithm SHA256).Hash -eq $expected) { powershell -Execut
 ### Linux
 
 ```bash
-cd "$(mktemp -d)" && v=v1.0.1 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory.sh" -fsSLO "$b/SHA256SUMS" && sha256sum -c --ignore-missing SHA256SUMS && sudo bash inventory.sh --skip-updates
+cd "$(mktemp -d)" && v=v1.0.2 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory.sh" -fsSLO "$b/SHA256SUMS" && sha256sum -c --ignore-missing SHA256SUMS && sudo bash inventory.sh --skip-updates
 ```
 
 ## Запуск с общей папки (без интернета)
@@ -85,19 +105,20 @@ cd "$(mktemp -d)" && v=v1.0.1 && b=https://github.com/softsol-pro/workstation-in
 Windows:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File \\server\share\inventory\inventory.ps1 -Config \\server\share\inventory\config.json -CsvPath \\server\share\inventory\inventory.csv
+powershell -ExecutionPolicy Bypass -File \\server\share\inventory\inventory.ps1 -Owner company -Config \\server\share\inventory\config.json -CsvPath \\server\share\inventory\inventory.csv
 ```
 
 Linux (папка смонтирована, например, `sudo mount -t cifs //server/share /mnt/share -o username=...`):
 
 ```bash
-sudo bash /mnt/share/inventory/inventory.sh --config /mnt/share/inventory/config.json --csv /mnt/share/inventory/inventory.csv
+sudo bash /mnt/share/inventory/inventory.sh --owner company --config /mnt/share/inventory/config.json --csv /mnt/share/inventory/inventory.csv
 ```
 
 ## Параметры
 
 | Windows | Linux | Что делает |
 |---|---|---|
+| `-Owner company\|personal` | `--owner company\|personal` | чей компьютер; без параметра скрипт спросит, а без консоли или терминала считает ПК личным ([подробнее](#компьютер-компании-или-личный)) |
 | `-Config <путь\|URL>` | `--config <путь\|URL>` | конфиг организации: локальный путь, UNC-путь (Windows) или `https://`-URL |
 | `-CsvPath <файл>` | `--csv <файл>` | дописать строку по этому ПК в CSV (разделитель `;`, UTF-8 с BOM, открывается в Excel). Если файла нет, он создаётся с заголовком |
 | `-JsonPath <файл>` | `--json <файл>` | сохранить полный отчёт в JSON: сводка, замечания, неполные проверки и все строки вывода |
@@ -164,10 +185,11 @@ sudo bash /mnt/share/inventory/inventory.sh --config /mnt/share/inventory/config
 ## Пример вывода
 
 ```
-Инвентаризация WS-042 — 19.10.2026 14:27 (inventory.ps1 1.0.1)
+Инвентаризация WS-042 — 19.10.2026 14:27 (inventory.ps1 1.0.2)
 Конфиг: \\server\share\inventory\config.json
 
 === Общее ===
+  Чей компьютер               компании
   Компьютер                   WS-042
   Пользователь                CORP\ivanov
   Модель                      ThinkPad T14 Gen 2 (20W0004XRT)
@@ -199,20 +221,57 @@ sudo bash /mnt/share/inventory/inventory.sh --config /mnt/share/inventory/config
   - Чужой VPN-ключ у ivanov: example-corp_petrov.ovpn
 ```
 
+## Проверка достоверности
+
+В папке `tests` лежат скрипты, которые запускают инвентаризацию на текущем ПК во всех режимах и сверяют результат
+с независимыми источниками. В системе они ничего не меняют. Их стоит прогнать на нескольких разных машинах
+(ноутбук, настольный ПК, моноблок, виртуалка), прежде чем раскатывать скрипт на всех.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tests\check-windows.ps1
+```
+
+```bash
+sudo bash tests/check-linux.sh
+```
+
+Что сверяется:
+
+| Проверка | Windows | Linux |
+|---|---|---|
+| имя ПК | `$env:COMPUTERNAME` | `hostname` |
+| процессор | реестр `CentralProcessor\0` | `/proc/cpuinfo` |
+| объём ОЗУ | `TotalPhysicalMemory` (± 2 ГБ) | `MemTotal` (± 2,5 ГБ) |
+| сборка / ядро | `ver` | `uname -r` |
+| свободно на системном томе | `Get-PSDrive` (± 2 ГБ) | `stat -f /` (± 1 ГБ) |
+| число дисков | `Get-Disk` | `/sys/block` |
+| последнее обновление | не раньше последнего KB из `Get-HotFix` | — |
+| модули памяти разобраны | — | при root и данных `dmidecode` |
+| личный режим | в выводе, CSV и JSON нет имени ПК, пользователя, серийника BIOS и домена | то же: `hostname`, пользователь, `product_serial`, домен из `realm` |
+| без консоли и без `-Owner` / `--owner` | ПК считается личным, скрипт не зависает | то же (через `setsid`, без терминала) |
+| запуск как однострочник | через `scriptblock` | через stdin, как `curl \| bash` |
+
+CI запускает эти проверки на каждый коммит: Windows Server 2022 и 2025 (от администратора),
+виртуалки Ubuntu 22.04 и 24.04 (от root, со строгим режимом `--strict`: под root не должно остаться неполных проверок),
+контейнеры Ubuntu 22.04 / 24.04 и Debian 12 / 13.
+
+Распайку памяти, батарею, мониторы, принтеры и ИБП на виртуалках проверить нельзя: такого железа там нет.
+Эти разделы стоит один раз сверить вручную на реальных ПК.
+
 ## Сопровождение
 
 - **Сроки поддержки ОС обновлять раз в год.** Таблица `$Life` в начале `windows/inventory.ps1` (плюс `$LatestWin11`) и таблица `EOL` в начале `linux/inventory.sh`.
   Сборки новее таблицы Windows-скрипт считает актуальными. Версии Ubuntu / Debian, которых нет в таблице, считаются старыми, если они не новее самой новой версии в таблице.
 - `windows/inventory.ps1` хранится в **UTF-8 с BOM** и совместим с Windows PowerShell 5.1 (без `?:`, `??`, `&&`). CI проверяет и то, и другое.
 - Линтеры: PSScriptAnalyzer (настройки в [PSScriptAnalyzerSettings.psd1](PSScriptAnalyzerSettings.psd1)) и shellcheck.
-  Workflow [lint.yml](.github/workflows/lint.yml) также запускает Linux-скрипт в контейнерах Ubuntu 22.04 / 24.04 и Debian 12 / 13.
+  Workflow [lint.yml](.github/workflows/lint.yml) также запускает [проверку достоверности](#проверка-достоверности) на нескольких ОС.
 
 ### Выпуск релиза
 
 1. Поднять версию в `$ScriptVersion` (`windows/inventory.ps1`) и `VERSION` (`linux/inventory.sh`).
 2. Закоммитить, поставить тег и запушить:
    ```bash
-   git tag v1.0.2 && git push origin v1.0.2
+   git tag v1.0.3 && git push origin v1.0.3
    ```
 3. Workflow [release.yml](.github/workflows/release.yml) проверит, что версия в скриптах совпадает с тегом, и приложит к релизу `inventory.ps1`, `inventory.sh` и `SHA256SUMS`.
 4. Обновить версию в однострочниках этого README.
