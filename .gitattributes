@@ -1,0 +1,7 @@
+# bash не переварит CRLF, PowerShell 5.1 — привычнее с CRLF (BOM в inventory.ps1 git сохраняет как есть)
+*.sh   text eol=lf
+*.ps1  text eol=crlf
+*.psd1 text eol=crlf
+*.json text eol=lf
+*.yml  text eol=lf
+*.md   text eol=lf

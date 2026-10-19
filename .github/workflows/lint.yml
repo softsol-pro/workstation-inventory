@@ -1,0 +1,88 @@
+name: lint
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  powershell:
+    name: PSScriptAnalyzer + пробный запуск (Windows PowerShell 5.1)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PSScriptAnalyzer
+        shell: powershell
+        run: |
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) { Install-Module PSScriptAnalyzer -Scope CurrentUser -Force }
+          $r = Invoke-ScriptAnalyzer -Path windows/inventory.ps1 -Settings ./PSScriptAnalyzerSettings.psd1
+          $r | Format-Table Severity, Line, RuleName, Message -AutoSize -Wrap
+          if ($r) { exit 1 }
+
+      - name: UTF-8 с BOM и синтаксис PS 5.1
+        shell: powershell
+        run: |
+          $b = [IO.File]::ReadAllBytes('windows/inventory.ps1')
+          if ($b[0] -ne 0xEF -or $b[1] -ne 0xBB -or $b[2] -ne 0xBF) { Write-Error 'inventory.ps1 должен быть в UTF-8 с BOM'; exit 1 }
+          $errs = $null
+          [void][Management.Automation.Language.Parser]::ParseFile("$PWD/windows/inventory.ps1", [ref]$null, [ref]$errs)
+          if ($errs) { $errs | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
+
+      - name: Запуск через -File
+        shell: powershell
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File windows/inventory.ps1 -SkipWU -Config config.example.json -JsonPath r.json -CsvPath r.csv
+          $j = Get-Content r.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          if (-not $j.configUsed -or -not $j.details.Count) { Write-Error 'JSON-отчёт неполный'; exit 1 }
+          if (-not (Test-Path r.csv)) { Write-Error 'CSV не записан'; exit 1 }
+
+      - name: Запуск через scriptblock (как однострочник)
+        shell: powershell
+        run: |
+          $code = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes("$PWD/windows/inventory.ps1")).TrimStart([char]0xFEFF)
+          & ([scriptblock]::Create($code)) -SkipWU -JsonPath r2.json
+          $j = Get-Content r2.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($j.configUsed) { Write-Error 'без -Config конфиг не должен использоваться'; exit 1 }
+
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck --version && shellcheck -S warning linux/inventory.sh
+
+  linux-smoke:
+    name: пробный запуск в ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:22.04', 'ubuntu:24.04', 'debian:12', 'debian:13']
+    container: ${{ matrix.image }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Голый контейнер — без конфига, без jq и python3
+        run: |
+          bash linux/inventory.sh --skip-updates --json /tmp/r0.json --csv /tmp/r0.csv
+          test -s /tmp/r0.json && test -s /tmp/r0.csv
+          bash linux/inventory.sh --config config.example.json --skip-updates | tee /tmp/out0.txt
+          grep -q 'Нет ни jq, ни python3' /tmp/out0.txt
+
+      - name: Конфиг через python3
+        run: |
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends python3 >/dev/null
+          bash linux/inventory.sh --config config.example.json --json /tmp/r1.json | tee /tmp/out1.txt
+          grep -q 'разобран через python3' /tmp/out1.txt
+          python3 -c 'import json; d = json.load(open("/tmp/r1.json")); assert d["configUsed"] and d["details"], d'
+
+      - name: Конфиг через jq
+        run: |
+          apt-get install -y -qq --no-install-recommends jq >/dev/null
+          bash linux/inventory.sh --config config.example.json --skip-updates --json /tmp/r2.json | tee /tmp/out2.txt
+          grep -q 'разобран через jq' /tmp/out2.txt
+          jq -e '.configUsed == true and (.details | length) > 10' /tmp/r2.json >/dev/null
+          jq -e '.configUsed == true' /tmp/r1.json >/dev/null
