@@ -23,7 +23,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
-$ScriptVersion = '1.0.2'
+$ScriptVersion = '1.1.0'
 
 # ================= сроки поддержки Windows =================
 # ОБНОВЛЯТЬ РАЗ В ГОД — когда выходит новая версия Windows 11 (обычно осенью):

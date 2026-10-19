@@ -18,12 +18,14 @@ jobs:
           v=${GITHUB_REF_NAME#v}
           grep -qF "\$ScriptVersion = '$v'" windows/inventory.ps1 || { echo "::error::в windows/inventory.ps1 не версия $v"; exit 1; }
           grep -qF "VERSION='$v'" linux/inventory.sh || { echo "::error::в linux/inventory.sh не версия $v"; exit 1; }
+          grep -qF "VERSION='$v'" macos/inventory.sh || { echo "::error::в macos/inventory.sh не версия $v"; exit 1; }
 
       - name: Файлы и SHA256SUMS
         run: |
           mkdir dist
           cp windows/inventory.ps1 linux/inventory.sh dist/
-          cd dist && sha256sum inventory.ps1 inventory.sh > SHA256SUMS && cat SHA256SUMS
+          cp macos/inventory.sh dist/inventory-macos.sh
+          cd dist && sha256sum inventory.ps1 inventory.sh inventory-macos.sh > SHA256SUMS && cat SHA256SUMS
 
       - name: Релиз
         env:

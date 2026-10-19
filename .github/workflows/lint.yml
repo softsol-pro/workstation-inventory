@@ -50,7 +50,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck --version && shellcheck -S warning linux/inventory.sh tests/check-linux.sh
+      - run: shellcheck --version && shellcheck -S warning linux/inventory.sh tests/check-linux.sh macos/inventory.sh tests/check-macos.sh
+
+  macos:
+    name: проверка на ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Синтаксис для системного bash 3.2
+        run: /bin/bash --version | head -1 && /bin/bash -n macos/inventory.sh && /bin/bash -n tests/check-macos.sh
+      - name: Проверка достоверности без sudo
+        run: /bin/bash tests/check-macos.sh
+      - name: Проверка достоверности под sudo
+        run: sudo /bin/bash tests/check-macos.sh
+      - name: Полный отчёт для просмотра (с softwareupdate)
+        run: /bin/bash macos/inventory.sh --owner company --config config.example.json
 
   linux-vm:
     name: проверка на виртуалке ${{ matrix.os }} (root)
