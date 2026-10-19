@@ -28,10 +28,12 @@ if have jq && jq -n 1 >/dev/null 2>&1; then
     jvalid() { jq empty "$1" 2>/dev/null; }
     jtop() { jq -r --arg k "$2" '.[$k] | if type == "array" then length else tostring end' "$1"; }
     jsum() { jq -r --arg k "$2" '.summary[$k]' "$1"; }
+    jdet() { jq -r --arg n "$2" '[.details[] | select(.Name == $n) | .Value][0] // ""' "$1"; }
 else
     jvalid() { osascript -l JavaScript -e "$JXA_READ"'; function run(a) { load(a[0]); return "ok" }' "$1" >/dev/null 2>&1; }
     jtop() { osascript -l JavaScript -e "$JXA_READ"'; function run(a) { var v = load(a[0])[a[1]]; return Array.isArray(v) ? v.length : String(v) }' "$1" "$2" 2>/dev/null; }
     jsum() { osascript -l JavaScript -e "$JXA_READ"'; function run(a) { return String(load(a[0]).summary[a[1]]) }' "$1" "$2" 2>/dev/null; }
+    jdet() { osascript -l JavaScript -e "$JXA_READ"'; function run(a) { var d = load(a[0]).details.filter(function (x) { return x.Name == a[1] }); return d.length ? d[0].Value : "" }' "$1" "$2" 2>/dev/null; }
 fi
 
 printf '\n\033[36mПроверка %s (через %s, %s)\033[0m\n' "$SCRIPT" "$SH" "$($SH -c 'echo $BASH_VERSION')"
@@ -65,6 +67,16 @@ if [ -s "$C" ]; then
 
     e=$(diskutil list physical 2>/dev/null | grep -c '^/dev/disk'); v=$(jsum "$C" 'Диски')
     chk "диски найдены" "в отчёте «$v», diskutil физических: $e" [ -n "$v" -o "$e" = 0 ]
+    # время без перезагрузки — по выводу uptime («up 3 days, 4:05» или «up 4:05»)
+    e=$(uptime | sed -nE 's/.* up ([0-9]+) day.*/\1/p'); e=${e:-0}
+    v=$(jdet "$C" 'Без перезагрузки'); v=${v%% *}
+    chk 'дней без перезагрузки совпадает с uptime' "в отчёте «$v», uptime $e" near "${v:--999}" "$e" 1
+
+    # тип учётки — по AuthenticationAuthority (у мобильных учёток AD там LocalCachedUser)
+    u=${SUDO_USER:-$(id -un)}
+    if dscl . -read "/Users/$u" AuthenticationAuthority 2>/dev/null | grep -q LocalCachedUser; then e='доменная'; else e='локальная'; fi
+    v=$(jdet "$C" 'Учётка пользователя'); chk 'тип учётки пользователя' "в отчёте «$v», ожидалось «$e»" [ "${v#"$e"}" != "$v" ]
+
     v=$(jtop "$C" details); chk 'в отчёте больше 20 строк' "строк: $v" [ "$v" -gt 20 ]
     printf '        sudo: %s; неполных проверок: %s; замечаний: %s\n' "$([ "$(id -u)" = 0 ] && echo да || echo нет)" "$(jtop "$C" incomplete)" "$(jtop "$C" issues)"
 fi

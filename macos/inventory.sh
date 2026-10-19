@@ -87,7 +87,7 @@ run_to() {
     ( sleep "$t"; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
     w=$!
     wait "$pid"; rc=$?
-    kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
+    pkill -P "$w" 2>/dev/null; kill "$w" 2>/dev/null; wait "$w" 2>/dev/null   # вместе со «сторожем» гасим и его sleep
     return $rc
 }
 
@@ -290,7 +290,8 @@ main() {
     [ -z "$model" ] && model=$(sysctl -n hw.model 2>/dev/null)
     [ -z "$mid" ] && mid=$(sysctl -n hw.model 2>/dev/null)
     [[ $model == *MacBook* ]] && is_laptop=1
-    boot=$(sysctl -n kern.boottime 2>/dev/null | sed -E 's/.*sec = ([0-9]+).*/\1/')
+    # kern.boottime: «{ sec = 1729000000, usec = 123 } Sat Oct 19 ...» — нужен именно sec, не usec
+    boot=$(sysctl -n kern.boottime 2>/dev/null | sed -nE 's/^\{ *sec = ([0-9]+),.*/\1/p')
     up=$(( $(now) - ${boot:-$(now)} )); up_d=$((up / 86400)); up_h=$(((up % 86400) / 3600))
 
     section 'Общее'
@@ -668,7 +669,8 @@ main() {
         fi
     elif [ -n "$dom" ]; then line 'Домен' "в ДРУГОМ домене: $(hide "$dom")" warn 'Компьютер в чужом домене'
     else line 'Домен' 'не в домене' "$([ -n "$CORP_DOMAIN" ] && echo warn)"; fi
-    if [ "$RUSER" != root ] && dscl . -read "/Users/$RUSER" OriginalNodeName >/dev/null 2>&1; then line 'Учётка пользователя' 'доменная (мобильная учётка AD)'
+    # dscl отвечает кодом 0 и при отсутствии атрибута («No such key»), поэтому смотрим на сам текст
+    if [ "$RUSER" != root ] && dscl . -read "/Users/$RUSER" AuthenticationAuthority 2>/dev/null | grep -q 'LocalCachedUser'; then line 'Учётка пользователя' 'доменная (мобильная учётка AD)'
     else line 'Учётка пользователя' 'локальная'; fi
 
     local ovbin ovv='' tb tbv tbo cn vpn_app=0 ver_shown=0
