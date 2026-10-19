@@ -117,8 +117,8 @@ load_config() {
     CFG_FILE=$(mktemp -t inventory-cfg) || return 1
     printf '%s' "$raw" > "$CFG_FILE"
     if have jq && jq -e 'type == "object"' "$CFG_FILE" >/dev/null 2>&1; then CFG_TOOL=jq
-    elif plutil -lint "$CFG_FILE" >/dev/null 2>&1 && [ "$(plutil -type . "$CFG_FILE" 2>/dev/null)" = dictionary ]; then CFG_TOOL=plutil
-    elif plutil -lint "$CFG_FILE" >/dev/null 2>&1; then CFG_TOOL=plutil
+    # plutil -lint понимает только plist, поэтому проверяем JSON конвертацией: корнем должен быть словарь
+    elif plutil -convert xml1 -o - "$CFG_FILE" 2>/dev/null | grep -q '^<dict>'; then CFG_TOOL=plutil
     else err_msg "Конфиг $src — не JSON-объект"; return 1; fi
 }
 cfg_get() {  # значение поля; массив — по элементу в строке

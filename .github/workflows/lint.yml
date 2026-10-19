@@ -67,6 +67,14 @@ jobs:
         run: /bin/bash tests/check-macos.sh
       - name: Проверка достоверности под sudo
         run: sudo /bin/bash tests/check-macos.sh
+      - name: Конфиг через jq и через plutil (Mac без jq)
+        run: |
+          /bin/bash macos/inventory.sh --owner company --skip-updates --config config.example.json | tee /tmp/jq.txt
+          grep -q 'разобран через jq' /tmp/jq.txt
+          mkdir -p /tmp/nojq && printf '#!/bin/sh\nexit 1\n' > /tmp/nojq/jq && chmod +x /tmp/nojq/jq
+          PATH=/tmp/nojq:$PATH /bin/bash macos/inventory.sh --owner company --skip-updates --config config.example.json | tee /tmp/plutil.txt
+          grep -q 'разобран через plutil' /tmp/plutil.txt
+          grep -q 'corp.example.com\|10.0.0.10' /tmp/plutil.txt || grep -q 'Контроллеры домена' /tmp/plutil.txt
       - name: Полный отчёт для просмотра (с softwareupdate)
         run: /bin/bash macos/inventory.sh --owner company --config config.example.json
 

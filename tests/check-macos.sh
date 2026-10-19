@@ -42,7 +42,7 @@ C=$TMP/company.json
 $SH "$SCRIPT" --owner company --skip-updates --json "$C" --csv "$TMP/company.csv" > "$TMP/company.out" 2>&1
 chk 'JSON-отчёт записан' "файла нет; вывод: $(tail -3 "$TMP/company.out" | tr '\n' ' ')" test -s "$C"
 if [ -s "$C" ]; then
-    chk 'JSON корректный' 'plutil -lint не принял файл' plutil -lint "$C"
+    chk 'JSON корректный' 'plutil не смог разобрать файл' /bin/bash -c 'plutil -convert xml1 -o /dev/null "$1"' _ "$C"
     v=$(jtop "$C" owner); chk 'owner = company' "owner = $v" [ "$v" = company ]
     e=$(scutil --get ComputerName 2>/dev/null || hostname); v=$(jsum "$C" 'ПК')
     chk 'имя компьютера' "в отчёте «$v», scutil «$e»" [ "$v" = "$e" ]

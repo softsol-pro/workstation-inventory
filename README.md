@@ -1,6 +1,6 @@
 # workstation-inventory
 
-Скрипты инвентаризации рабочих мест для **Windows** и **Linux**. Запускаются одной командой и выводят в консоль цветной отчёт:
+Скрипты инвентаризации рабочих мест для **Windows**, **Linux** и **macOS**. Запускаются одной командой и выводят в консоль цветной отчёт:
 зелёный — в порядке, жёлтый — стоит посмотреть, красный — проблема. В конце печатается список замечаний.
 Строку по каждому ПК можно дописать в общую CSV-таблицу, а полный отчёт сохранить в JSON.
 
@@ -19,6 +19,22 @@
 | Антивирус | продукты из Центра безопасности, включён ли, актуальны ли базы; ожидаемый антивирус из конфига | Kaspersky Endpoint Security for Linux (`kesl-control`), ClamAV (версия и возраст баз), иначе «не найден» |
 | Администраторы | состав группы «Администраторы», доменные учётки в ней, админ ли текущий пользователь, встроенный Administrator | члены групп sudo / wheel / admin, админ ли пользователь (`sudo -l`), пароль root, вход root по SSH |
 | Домен и VPN | домен, доверие с доменом, тип учётки, OpenVPN GUI / Connect и версия, ключи `.ovpn` (в том числе чужие), туннель, доступность контроллеров домена | `realm` / sssd / winbind, доверие (`adcli testjoin` / `wbinfo -t`), версия `openvpn`, профили в `/etc/openvpn`, `/home` и NetworkManager, туннель, доступность контроллеров по TCP 389 |
+
+**macOS** (`macos/inventory.sh`) — те же разделы на системном bash 3.2 и стандартных утилитах, без внешних зависимостей:
+
+| Раздел | Откуда данные |
+|---|---|
+| Общее, процессор | `system_profiler SPHardwareDataType`, `sysctl` (модель, серийник, Apple Silicon или Intel, ядра производительные / энергоэффективные) |
+| Память | `hw.memsize`, `vm_stat`, `SPMemoryDataType`. Apple Silicon — всегда распайка; на Intel — по полю Apple «Upgradeable Memory», иначе общие [правила](#распайка-или-слот) |
+| Диски | `diskutil` (SSD / HDD / NVMe, SMART), свободное место на томе «Macintosh HD» |
+| Периферия | мониторы (`SPDisplaysDataType`), принтеры (`lpstat`), батарея (ёмкость, циклы, состояние), ИБП (`pmset`) |
+| macOS и обновления | `sw_vers`, поддержка (Apple обновляет три последние версии), последнее обновление из истории установок, `softwareupdate -l` |
+| Защита | FileVault, SIP, Gatekeeper, брандмауэр, Secure Enclave / T2 |
+| Антивирус | версия и возраст баз XProtect, сторонние антивирусы в `/Applications` (Kaspersky, ESET, Sophos и др.) и запущены ли они |
+| Администраторы | группа `admin`, админ ли пользователь (`dseditgroup`), учётка root, удалённый вход по SSH |
+| Домен и VPN | `dsconfigad` / `odutil` (AD), OpenVPN, Tunnelblick, OpenVPN Connect и их профили, VPN из настроек macOS (`scutil --nc`), туннель, контроллеры домена |
+
+Папки «Документы», «Загрузки» и «Рабочий стол» скрипт не читает, поэтому macOS не показывает окно с запросом доступа к файлам.
 
 Без прав администратора (root) скрипты всё равно работают, а в конце перечисляют проверки, которые остались неполными.
 
@@ -44,20 +60,20 @@
 
 ## Быстрый запуск
 
-Однострочники берут файлы из конкретного релиза, а не из `main`. Подставьте нужную версию вместо `v1.0.2`.
+Однострочники берут файлы из конкретного релиза, а не из `main`. Подставьте нужную версию вместо `v1.1.0`.
 
 ### Windows
 
 PowerShell **от администратора**:
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.2/inventory.ps1')).TrimStart([char]0xFEFF))) -SkipWU
+[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory.ps1')).TrimStart([char]0xFEFF))) -SkipWU
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.2/inventory.ps1')).TrimStart([char]0xFEFF))) -Owner company -Config '\\server\share\inventory\config.json' -CsvPath '\\server\share\inventory\inventory.csv'
+[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory.ps1')).TrimStart([char]0xFEFF))) -Owner company -Config '\\server\share\inventory\config.json' -CsvPath '\\server\share\inventory\inventory.csv'
 ```
 
 > Почему не `irm`: GitHub отдаёт ассеты релиза как `application/octet-stream`, и `Invoke-RestMethod` в Windows PowerShell 5.1
@@ -67,13 +83,27 @@ PowerShell **от администратора**:
 ### Linux
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.2/inventory.sh | sudo bash -s -- --skip-updates
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory.sh | sudo bash -s -- --skip-updates
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.0.2/inventory.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /mnt/share/inventory/inventory.csv
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /mnt/share/inventory/inventory.csv
+```
+
+### macOS
+
+В «Терминале» (в релизе файл называется `inventory-macos.sh`):
+
+```bash
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory-macos.sh | sudo bash -s -- --skip-updates
+```
+
+С конфигом и записью в общую таблицу:
+
+```bash
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory-macos.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /Volumes/share/inventory/inventory.csv
 ```
 
 > Ссылки `releases/download/...` открываются без авторизации, только если репозиторий **публичный**.
@@ -86,7 +116,7 @@ curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/downloa
 ### Windows
 
 ```powershell
-$v = 'v1.0.2'; $b = "https://github.com/softsol-pro/workstation-inventory/releases/download/$v"; $f = "$env:TEMP\inventory.ps1"
+$v = 'v1.1.0'; $b = "https://github.com/softsol-pro/workstation-inventory/releases/download/$v"; $f = "$env:TEMP\inventory.ps1"
 $wc = New-Object Net.WebClient; $wc.DownloadFile("$b/inventory.ps1", $f)
 $expected = (($wc.DownloadString("$b/SHA256SUMS") -split "`n" | Where-Object { $_ -match 'inventory\.ps1' }) -split '\s+')[0]
 if ((Get-FileHash $f -Algorithm SHA256).Hash -eq $expected) { powershell -ExecutionPolicy Bypass -File $f -SkipWU } else { Write-Host 'ХЕШ НЕ СОВПАДАЕТ' -ForegroundColor Red }
@@ -95,12 +125,18 @@ if ((Get-FileHash $f -Algorithm SHA256).Hash -eq $expected) { powershell -Execut
 ### Linux
 
 ```bash
-cd "$(mktemp -d)" && v=v1.0.2 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory.sh" -fsSLO "$b/SHA256SUMS" && sha256sum -c --ignore-missing SHA256SUMS && sudo bash inventory.sh --skip-updates
+cd "$(mktemp -d)" && v=v1.1.0 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory.sh" -fsSLO "$b/SHA256SUMS" && sha256sum -c --ignore-missing SHA256SUMS && sudo bash inventory.sh --skip-updates
+```
+
+### macOS
+
+```bash
+cd "$(mktemp -d)" && v=v1.1.0 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory-macos.sh" -fsSLO "$b/SHA256SUMS" && grep inventory-macos.sh SHA256SUMS | shasum -a 256 -c && sudo bash inventory-macos.sh --skip-updates
 ```
 
 ## Запуск с общей папки (без интернета)
 
-Положите `inventory.ps1`, `inventory.sh` и `config.json` в общую папку, например `\\server\share\inventory\`.
+Положите `inventory.ps1`, `inventory.sh`, `inventory-macos.sh` и `config.json` в общую папку, например `\\server\share\inventory\`.
 
 Windows:
 
@@ -114,9 +150,15 @@ Linux (папка смонтирована, например, `sudo mount -t cif
 sudo bash /mnt/share/inventory/inventory.sh --owner company --config /mnt/share/inventory/config.json --csv /mnt/share/inventory/inventory.csv
 ```
 
+macOS (папка подключена через Finder → «Подключение к серверу», `smb://server/share`, и видна в `/Volumes/share`):
+
+```bash
+sudo bash /Volumes/share/inventory/inventory-macos.sh --owner company --config /Volumes/share/inventory/config.json --csv /Volumes/share/inventory/inventory.csv
+```
+
 ## Параметры
 
-| Windows | Linux | Что делает |
+| Windows | Linux и macOS | Что делает |
 |---|---|---|
 | `-Owner company\|personal` | `--owner company\|personal` | чей компьютер; без параметра скрипт спросит, а без консоли или терминала считает ПК личным ([подробнее](#компьютер-компании-или-личный)) |
 | `-Config <путь\|URL>` | `--config <путь\|URL>` | конфиг организации: локальный путь, UNC-путь (Windows) или `https://`-URL |
@@ -124,8 +166,9 @@ sudo bash /mnt/share/inventory/inventory.sh --owner company --config /mnt/share/
 | `-JsonPath <файл>` | `--json <файл>` | сохранить полный отчёт в JSON: сводка, замечания, неполные проверки и все строки вывода |
 | `-SkipWU` | `--skip-updates` | не проверять доступные обновления (на Windows поиск в Центре обновления занимает до 1–2 минут) |
 
-Колонки CSV у обеих версий одинаковые, поэтому Windows и Linux можно писать в одну таблицу.
+Колонки CSV у всех трёх версий одинаковые, поэтому Windows, Linux и macOS можно писать в одну таблицу.
 Для Linux в колонке `Windows` будет дистрибутив, в `Сборка` — ядро, в `C: свободно ГБ` — свободное место на `/`.
+Для macOS — версия macOS, номер сборки и свободное место на «Macintosh HD».
 
 ## Конфиг
 
@@ -185,7 +228,7 @@ sudo bash /mnt/share/inventory/inventory.sh --owner company --config /mnt/share/
 ## Пример вывода
 
 ```
-Инвентаризация WS-042 — 19.10.2026 14:27 (inventory.ps1 1.0.2)
+Инвентаризация WS-042 — 19.10.2026 14:27 (inventory.ps1 1.1.0)
 Конфиг: \\server\share\inventory\config.json
 
 === Общее ===
@@ -235,43 +278,50 @@ powershell -ExecutionPolicy Bypass -File tests\check-windows.ps1
 sudo bash tests/check-linux.sh
 ```
 
+```bash
+bash tests/check-macos.sh
+```
+
 Что сверяется:
 
-| Проверка | Windows | Linux |
-|---|---|---|
-| имя ПК | `$env:COMPUTERNAME` | `hostname` |
-| процессор | реестр `CentralProcessor\0` | `/proc/cpuinfo` |
-| объём ОЗУ | `TotalPhysicalMemory` (± 2 ГБ) | `MemTotal` (± 2,5 ГБ) |
-| сборка / ядро | `ver` | `uname -r` |
-| свободно на системном томе | `Get-PSDrive` (± 2 ГБ) | `stat -f /` (± 1 ГБ) |
-| число дисков | `Get-Disk` | `/sys/block` |
-| последнее обновление | не раньше последнего KB из `Get-HotFix` | — |
-| модули памяти разобраны | — | при root и данных `dmidecode` |
-| личный режим | в выводе, CSV и JSON нет имени ПК, пользователя, серийника BIOS и домена | то же: `hostname`, пользователь, `product_serial`, домен из `realm` |
-| без консоли и без `-Owner` / `--owner` | ПК считается личным, скрипт не зависает | то же (через `setsid`, без терминала) |
-| запуск как однострочник | через `scriptblock` | через stdin, как `curl \| bash` |
+| Проверка | Windows | Linux | macOS |
+|---|---|---|---|
+| имя ПК | `$env:COMPUTERNAME` | `hostname` | `scutil --get ComputerName` |
+| процессор | реестр `CentralProcessor\0` | `/proc/cpuinfo` | `system_profiler` (Apple Silicon) |
+| объём ОЗУ | `TotalPhysicalMemory` (± 2 ГБ) | `MemTotal` (± 2,5 ГБ) | `system_profiler` (точно) |
+| сборка / ядро / версия | `ver` | `uname -r`, `os-release` | `kern.osversion`, `SystemVersion.plist` |
+| свободно на системном томе | `Get-PSDrive` (± 2 ГБ) | `stat -f /` (± 1 ГБ) | `diskutil` (± 2 ГБ) |
+| число дисков | `Get-Disk` | `/sys/block` | диски найдены |
+| последнее обновление | не раньше последнего KB из `Get-HotFix` | — | — |
+| модули памяти разобраны | — | при root и данных `dmidecode` | — |
+| личный режим | в выводе, CSV и JSON нет имени ПК, пользователя, серийника BIOS и домена | то же: `hostname`, пользователь, `product_serial`, домен из `realm` | то же: имена компьютера, пользователь и его полное имя, серийник, домен AD |
+| без консоли и без `-Owner` / `--owner` | ПК считается личным, скрипт не зависает | то же (через `setsid`, без терминала) | то же (новый сеанс через `perl`) |
+| запуск как однострочник | через `scriptblock` | через stdin, как `curl \| bash` | то же, системным `/bin/bash` 3.2 |
 
 CI запускает эти проверки на каждый коммит: Windows Server 2022 и 2025 (от администратора),
 виртуалки Ubuntu 22.04 и 24.04 (от root, со строгим режимом `--strict`: под root не должно остаться неполных проверок),
-контейнеры Ubuntu 22.04 / 24.04 и Debian 12 / 13.
+контейнеры Ubuntu 22.04 / 24.04 и Debian 12 / 13, macOS 14 и 15 на Apple Silicon (без sudo и под sudo).
 
 Распайку памяти, батарею, мониторы, принтеры и ИБП на виртуалках проверить нельзя: такого железа там нет.
 Эти разделы стоит один раз сверить вручную на реальных ПК.
 
 ## Сопровождение
 
-- **Сроки поддержки ОС обновлять раз в год.** Таблица `$Life` в начале `windows/inventory.ps1` (плюс `$LatestWin11`) и таблица `EOL` в начале `linux/inventory.sh`.
+- **Сроки поддержки ОС обновлять раз в год.** Таблица `$Life` в начале `windows/inventory.ps1` (плюс `$LatestWin11`), таблица `EOL` в начале `linux/inventory.sh`
+  и список `MACOS_VERSIONS` в начале `macos/inventory.sh` (осенью дописать номер новой macOS).
   Сборки новее таблицы Windows-скрипт считает актуальными. Версии Ubuntu / Debian, которых нет в таблице, считаются старыми, если они не новее самой новой версии в таблице.
+  Для macOS актуальными считаются три последние версии из списка: Apple официальных сроков не публикует.
 - `windows/inventory.ps1` хранится в **UTF-8 с BOM** и совместим с Windows PowerShell 5.1 (без `?:`, `??`, `&&`). CI проверяет и то, и другое.
 - Линтеры: PSScriptAnalyzer (настройки в [PSScriptAnalyzerSettings.psd1](PSScriptAnalyzerSettings.psd1)) и shellcheck.
   Workflow [lint.yml](.github/workflows/lint.yml) также запускает [проверку достоверности](#проверка-достоверности) на нескольких ОС.
 
 ### Выпуск релиза
 
-1. Поднять версию в `$ScriptVersion` (`windows/inventory.ps1`) и `VERSION` (`linux/inventory.sh`).
+1. Поднять версию в `$ScriptVersion` (`windows/inventory.ps1`) и `VERSION` (`linux/inventory.sh`, `macos/inventory.sh`).
 2. Закоммитить, поставить тег и запушить:
    ```bash
-   git tag v1.0.3 && git push origin v1.0.3
+   git tag v1.1.1 && git push origin v1.1.1
    ```
-3. Workflow [release.yml](.github/workflows/release.yml) проверит, что версия в скриптах совпадает с тегом, и приложит к релизу `inventory.ps1`, `inventory.sh` и `SHA256SUMS`.
+3. Workflow [release.yml](.github/workflows/release.yml) проверит, что версия во всех трёх скриптах совпадает с тегом, и приложит к релизу
+   `inventory.ps1`, `inventory.sh`, `inventory-macos.sh` и `SHA256SUMS`.
 4. Обновить версию в однострочниках этого README.
