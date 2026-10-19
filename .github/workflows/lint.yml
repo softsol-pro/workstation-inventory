@@ -23,7 +23,7 @@ jobs:
         shell: powershell
         run: |
           $b = [IO.File]::ReadAllBytes('windows/inventory.ps1')
-          if ($b[0] -ne 0xEF -or $b[1] -ne 0xBB -or $b[2] -ne 0xBF) { Write-Error 'inventory.ps1 должен быть в UTF-8 с BOM'; exit 1 }
+          if ($b[0] -ne 0xEF -or $b[1] -ne 0xBB -or $b[2] -ne 0xBF) { Write-Error 'inventory.ps1 must be UTF-8 with BOM'; exit 1 }
           $errs = $null
           [void][Management.Automation.Language.Parser]::ParseFile("$PWD/windows/inventory.ps1", [ref]$null, [ref]$errs)
           if ($errs) { $errs | ForEach-Object { "$($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
@@ -33,8 +33,8 @@ jobs:
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File windows/inventory.ps1 -SkipWU -Config config.example.json -JsonPath r.json -CsvPath r.csv
           $j = Get-Content r.json -Raw -Encoding UTF8 | ConvertFrom-Json
-          if (-not $j.configUsed -or -not $j.details.Count) { Write-Error 'JSON-отчёт неполный'; exit 1 }
-          if (-not (Test-Path r.csv)) { Write-Error 'CSV не записан'; exit 1 }
+          if (-not $j.configUsed -or -not $j.details.Count) { Write-Error 'JSON report is incomplete'; exit 1 }
+          if (-not (Test-Path r.csv)) { Write-Error 'CSV was not written'; exit 1 }
 
       - name: Запуск через scriptblock (как однострочник)
         shell: powershell
@@ -42,7 +42,7 @@ jobs:
           $code = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes("$PWD/windows/inventory.ps1")).TrimStart([char]0xFEFF)
           & ([scriptblock]::Create($code)) -SkipWU -JsonPath r2.json
           $j = Get-Content r2.json -Raw -Encoding UTF8 | ConvertFrom-Json
-          if ($j.configUsed) { Write-Error 'без -Config конфиг не должен использоваться'; exit 1 }
+          if ($j.configUsed) { Write-Error 'config must not be used without -Config'; exit 1 }
 
   shellcheck:
     name: shellcheck

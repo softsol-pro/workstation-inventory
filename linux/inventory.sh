@@ -263,7 +263,7 @@ main() {
     local vendor pname pver serial chassis model is_laptop=0 up up_d up_h st
     vendor=$(dmi sys_vendor); pname=$(dmi product_name); pver=$(dmi product_version)
     chassis=$(dmi chassis_type)
-    case " 8 9 10 11 12 14 18 21 30 31 32 " in *" ${chassis:-x} "*) is_laptop=1 ;; esac
+    if [[ " 8 9 10 11 12 14 18 21 30 31 32 " == *" ${chassis:-x} "* ]]; then is_laptop=1; fi
     model=$pname
     if [[ ${vendor^^} == *LENOVO* ]] && [ -n "$pver" ]; then model="$pver ($pname)"; fi
     if [ -r /sys/class/dmi/id/product_serial ]; then serial=$(dmi product_serial)
@@ -481,13 +481,12 @@ main() {
 
     # ================= ОС и обновления =================
     section 'ОС и обновления'
-    local os_id='' os_ver='' os_pretty='' os_like='' kern pm=''
+    local os_id='' os_ver='' os_pretty='' kern pm=''
     # shellcheck disable=SC1091
     if [ -r /etc/os-release ]; then
         os_id=$(. /etc/os-release && echo "${ID:-}")
         os_ver=$(. /etc/os-release && echo "${VERSION_ID:-}")
         os_pretty=$(. /etc/os-release && echo "${PRETTY_NAME:-}")
-        os_like=$(. /etc/os-release && echo "${ID_LIKE:-}")
     fi
     kern=$(uname -r)
     line 'Дистрибутив' "${os_pretty:-нет данных}"
