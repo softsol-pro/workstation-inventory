@@ -21,17 +21,17 @@ chk() {  # chk "название" "подробности при ошибке" �
 }
 near() { awk -v a="$1" -v b="$2" -v d="$3" 'BEGIN { x = a - b; if (x < 0) x = -x; exit !(x <= d) }'; }
 field() { awk -v k="$1" '{ l = $0; sub(/^[ \t]+/, "", l); n = index(l, ":"); if (n && substr(l, 1, n - 1) == k) { v = substr(l, n + 1); sub(/^[ \t]+/, "", v); if (v != "") { print v; exit } } }'; }
-# чтение JSON-отчёта: jq, иначе plutil (есть всегда)
-if have jq; then
+# чтение JSON-отчёта: jq, иначе JavaScript через osascript (есть в любой macOS).
+# plutil не подходит: в отчёте есть null, а у plist такого типа нет.
+JXA_READ='ObjC.import("Foundation"); function load(p) { return JSON.parse($.NSString.stringWithContentsOfFileEncodingError(p, $.NSUTF8StringEncoding, null).js) }'
+if have jq && jq -n 1 >/dev/null 2>&1; then
+    jvalid() { jq empty "$1" 2>/dev/null; }
     jtop() { jq -r --arg k "$2" '.[$k] | if type == "array" then length else tostring end' "$1"; }
     jsum() { jq -r --arg k "$2" '.summary[$k]' "$1"; }
 else
-    jtop() {
-        local v i=0
-        if v=$(plutil -extract "$2" raw -o - "$1" 2>/dev/null); then printf '%s\n' "$v"; return; fi
-        while plutil -extract "$2.$i" raw -o - "$1" >/dev/null 2>&1; do i=$((i + 1)); done; echo "$i"
-    }
-    jsum() { plutil -extract "summary.$2" raw -o - "$1" 2>/dev/null; }
+    jvalid() { osascript -l JavaScript -e "$JXA_READ"'; function run(a) { load(a[0]); return "ok" }' "$1" >/dev/null 2>&1; }
+    jtop() { osascript -l JavaScript -e "$JXA_READ"'; function run(a) { var v = load(a[0])[a[1]]; return Array.isArray(v) ? v.length : String(v) }' "$1" "$2" 2>/dev/null; }
+    jsum() { osascript -l JavaScript -e "$JXA_READ"'; function run(a) { return String(load(a[0]).summary[a[1]]) }' "$1" "$2" 2>/dev/null; }
 fi
 
 printf '\n\033[36mПроверка %s (через %s, %s)\033[0m\n' "$SCRIPT" "$SH" "$($SH -c 'echo $BASH_VERSION')"
@@ -42,7 +42,7 @@ C=$TMP/company.json
 $SH "$SCRIPT" --owner company --skip-updates --json "$C" --csv "$TMP/company.csv" > "$TMP/company.out" 2>&1
 chk 'JSON-отчёт записан' "файла нет; вывод: $(tail -3 "$TMP/company.out" | tr '\n' ' ')" test -s "$C"
 if [ -s "$C" ]; then
-    chk 'JSON корректный' 'plutil не смог разобрать файл' /bin/bash -c 'plutil -convert xml1 -o /dev/null "$1"' _ "$C"
+    chk 'JSON корректный' 'файл не разбирается как JSON' jvalid "$C"
     v=$(jtop "$C" owner); chk 'owner = company' "owner = $v" [ "$v" = company ]
     e=$(scutil --get ComputerName 2>/dev/null || hostname); v=$(jsum "$C" 'ПК')
     chk 'имя компьютера' "в отчёте «$v», scutil «$e»" [ "$v" = "$e" ]

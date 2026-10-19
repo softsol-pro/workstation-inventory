@@ -74,7 +74,9 @@ jobs:
           mkdir -p /tmp/nojq && printf '#!/bin/sh\nexit 1\n' > /tmp/nojq/jq && chmod +x /tmp/nojq/jq
           PATH=/tmp/nojq:$PATH /bin/bash macos/inventory.sh --owner company --skip-updates --config config.example.json | tee /tmp/plutil.txt
           grep -q 'разобран через plutil' /tmp/plutil.txt
-          grep -q 'corp.example.com\|10.0.0.10' /tmp/plutil.txt || grep -q 'Контроллеры домена' /tmp/plutil.txt
+          grep -q 'Контроллеры домена' /tmp/plutil.txt
+      - name: Проверка достоверности на Mac без jq (чтение отчёта через osascript)
+        run: PATH=/tmp/nojq:$PATH /bin/bash tests/check-macos.sh
       - name: Полный отчёт для просмотра (с softwareupdate)
         run: /bin/bash macos/inventory.sh --owner company --config config.example.json
 
