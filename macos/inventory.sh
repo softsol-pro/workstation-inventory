@@ -14,7 +14,7 @@
 # В начале скрипт спрашивает, чей это компьютер. Для личного ПК имя ПК, пользователь, серийники,
 # учётки, имя домена, VPN-ключи и IP-адреса не собираются.
 
-VERSION='1.2.0'
+VERSION='1.3.0'
 
 # ================= поддержка macOS =================
 # ОБНОВЛЯТЬ РАЗ В ГОД — осенью, когда выходит новая macOS: дописать её номер в конец списка.
@@ -692,6 +692,23 @@ main() {
         else line "$aname" 'установлен, не запущен' warn "$aname установлен, но не запущен"; fi
         avs+=("$aname")
     done
+    # Kaspersky для Mac: возраст баз — по самым свежим файлам в папке баз. Документированной консольной команды
+    # статуса постоянной защиты у Kaspersky для Mac нет, поэтому её состояние по всем Mac смотрите в облачной консоли KSOS.
+    local kbd kbt kbn=''
+    if printf '%s\n' "${avs[@]}" | grep -qi kaspersky; then
+        kbd=$(find "/Library/Application Support/Kaspersky Lab" -maxdepth 5 -type d -iname 'bases' 2>/dev/null | head -1)
+        kbt=''; [ -n "$kbd" ] && kbt=$(find "$kbd" -type f -exec stat -f %m {} + 2>/dev/null | sort -n | tail -1)
+        if [ -n "$kbt" ]; then
+            ld=$(( ($(now) - kbt) / 86400 ))
+            if [ "$ld" -gt 7 ]; then st=bad; elif [ "$ld" -gt 3 ]; then st=warn; else st=ok; fi
+            line 'Базы Kaspersky' "обновлены $(fmt_epoch "$kbt") ($ld дн. назад, по дате файлов баз)" "$st" "$([ "$st" = bad ] && echo "Kaspersky: базы не обновлялись $ld дн.")"
+            kbn=" | базы $(ymd_of "$kbt")"
+        else
+            line 'Базы Kaspersky' "нет данных (папка баз не найдена$([ "$IS_ROOT" = 1 ] || echo ', попробуйте через sudo'))" warn
+        fi
+        line 'Постоянная защита' 'по консоли не определить — смотрите облачную консоль KSOS'
+        for k in "${!avs[@]}"; do [[ ${avs[k]} == *Kaspersky* ]] && avs[k]="${avs[k]}$kbn"; done
+    fi
     if [ -n "$EXPECTED_AV" ]; then
         if printf '%s\n' "${avs[@]}" | grep -qiF -- "$EXPECTED_AV"; then
             rset 'Антивирус' "$(join_by ', ' "${avs[@]}")"

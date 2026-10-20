@@ -13,7 +13,7 @@
 # Нужен bash 4+. Всё необязательное (dmidecode, smartctl, edid-decode, jq/python3, lpstat, upsc,
 # nmcli, realm, ...) проверяется на наличие; если чего-то нет — в выводе будет «нет данных».
 
-VERSION='1.2.0'
+VERSION='1.3.0'
 
 # ================= сроки поддержки дистрибутивов =================
 # ОБНОВЛЯТЬ РАЗ В ГОД — когда выходит новая LTS Ubuntu / новый Debian.
@@ -203,6 +203,20 @@ mem_verdict() {
         else MV_TEXT='не определить'; MV_KIND=unknown; fi
     fi
 }
+
+# Kaspersky Endpoint Security for Linux: kesl-control --app-info → версия, постоянная защита, дата выпуска баз,
+# последний запуск обновления (поля через \x1f). Проверяется в tests/check-linux.sh на примере вывода (tests/fixtures).
+kesl_parse() {
+    awk '
+        function val(l) { sub(/^[^:]*:[ \t]*/, "", l); sub(/[ \t\r]+$/, "", l); return l }
+        { k = $0; sub(/:.*/, "", k); k = tolower(k) }
+        (k ~ /^ *version/ || k ~ /^ *верси/) && ver == "" { ver = val($0) }
+        (k ~ /file threat protection/ || k ~ /защита от файловых угроз/) && fp == "" { fp = val($0) }
+        ((k ~ /release date/ && k ~ /database/) || (k ~ /дата выпуска/ && k ~ /баз/)) && db == "" { db = val($0) }
+        ((k ~ /last run/ && k ~ /update/) || (k ~ /последн/ && k ~ /обновлени/)) && up == "" { up = val($0) }
+        END { printf "%s\037%s\037%s\037%s", ver, fp, db, up }'
+}
+first_date() { sed -nE 's/.*([0-9]{4}-[0-9]{2}-[0-9]{2}( [0-9]{2}:[0-9]{2}(:[0-9]{2})?)?).*/\1/p' <<< "$1" | head -1; }
 
 # серийник без заглушек производителя
 clean_sn() {
@@ -767,13 +781,35 @@ main() {
         ks=$(svc_state kesl)
         case $ks in active) st=ok; ks='работает' ;; '?') st=''; ks='статус службы: нет данных' ;; *) st=bad; ks="служба kesl: ${ks:-не запущена}" ;; esac
         line 'Kaspersky Endpoint Security' "установлен, $ks" "$st" "$([ "$st" = bad ] && echo 'Kaspersky Endpoint Security установлен, но служба не работает')"
+        local kv kfp kdb kup kd kld kfp_s='?'
         if [ "$IS_ROOT" = 1 ]; then
-            kinfo=$("$kesl" --app-info 2>/dev/null | grep -iE 'version|верси|database|баз' | head -3)
-            while IFS= read -r l; do [ -n "$l" ] && line '' "$(trim "$l")"; done <<< "$kinfo"
+            kinfo=$("$kesl" --app-info 2>/dev/null)
+            IFS=$'\x1f' read -r kv kfp kdb kup <<< "$(kesl_parse <<< "$kinfo")"
+            [ -n "$kv" ] && line 'Версия' "$kv"
+            case ${kfp,,} in
+                running|started|запущена|выполняется) line 'Постоянная защита файлов' 'включена' ok; kfp_s='вкл' ;;
+                '') line 'Постоянная защита файлов' 'нет данных' warn ;;
+                *) line 'Постоянная защита файлов' "ВЫКЛЮЧЕНА ($kfp)" bad 'KESL: постоянная защита файлов выключена'; kfp_s='ВЫКЛ' ;;
+            esac
+            # возраст баз — по дате их выпуска; запуск задачи обновления — отдельно
+            kd=$(first_date "$kdb")
+            if [ -n "$kd" ] && kld=$(days_since "$kd"); then
+                if [ "$kld" -gt 7 ]; then st=bad; elif [ "$kld" -gt 3 ]; then st=warn; else st=ok; fi
+                line 'Базы' "выпущены $(fmt_date "$kd") ($kld дн. назад)" "$st" "$([ "$st" = bad ] && echo "KESL: базы не обновлялись $kld дн.")"
+            else
+                line 'Базы' "нет данных${kdb:+ ($kdb)}" warn
+            fi
+            kd=$(first_date "$kup"); [ -n "$kd" ] && line 'Последнее обновление баз' "запуск задачи $(fmt_date "$kd") ($(days_since "$kd") дн. назад)"
+            # Агент администрирования — только если станция подключена к Kaspersky Security Center
+            for l in /opt/kaspersky/klnagent64/bin/klnagchk /opt/kaspersky/klnagent/bin/klnagchk; do
+                [ -x "$l" ] || continue
+                line 'Агент администрирования' "$("$l" 2>/dev/null | grep -iE 'administration server|synchroniz|connect' | head -2 | xargs | cut -c1-150)"
+                break
+            done
         else
-            incomplete 'сведения KESL'
+            incomplete 'сведения KESL (защита, базы)'
         fi
-        avs+=('Kaspersky Endpoint Security for Linux')
+        avs+=("Kaspersky Endpoint Security for Linux | защита файлов $kfp_s${kd:+ | базы $kd}")
     fi
     if have clamscan || have clamdscan || have clamd; then
         cv=$( (clamscan --version || clamdscan --version) 2>/dev/null | head -1)

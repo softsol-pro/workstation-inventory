@@ -17,7 +17,7 @@
 | Периферия | мониторы и их серийники ([из EDID](#серийники)), принтеры и способ подключения, батарея (износ, модель, серийник), ИБП | мониторы из `/sys/class/drm/*/edid` (`edid-decode`, если установлен), `lpstat`, `/sys/class/power_supply`, ИБП через `upsc` (NUT, с серийником) или `lsusb` |
 | Клавиатура и мышь | USB, Bluetooth и встроенные: имя, которое сообщает само устройство, производитель по VID, VID:PID, серийник | `/proc/bus/input/devices` + сведения USB из `/sys` (имя, производитель, серийник), у Bluetooth — адрес |
 | ОС и обновления | версия, сборка, срок поддержки Microsoft, TPM, Secure Boot, служба обновлений, последнее обновление, доступные обновления, ожидание перезагрузки | дистрибутив, ядро, срок поддержки (Ubuntu / Debian), TPM, Secure Boot, последнее обновление и доступные обновления (apt / dnf / yum / zypper / pacman), `reboot-required` / `needs-restarting` |
-| Антивирус | продукты из Центра безопасности, включён ли, актуальны ли базы; ожидаемый антивирус из конфига | Kaspersky Endpoint Security for Linux (`kesl-control`), ClamAV (версия и возраст баз), иначе «не найден» |
+| Антивирус | продукты из Центра безопасности, включён ли, актуальны ли базы; ожидаемый антивирус из конфига; для Kaspersky — [подробный статус](#kaspersky) | Kaspersky Endpoint Security for Linux (`kesl-control`: защита, дата баз), ClamAV (версия и возраст баз), иначе «не найден» |
 | Администраторы | состав группы «Администраторы», доменные учётки в ней, админ ли текущий пользователь, встроенный Administrator | члены групп sudo / wheel / admin, админ ли пользователь (`sudo -l`), пароль root, вход root по SSH |
 | Домен и VPN | домен, доверие с доменом, тип учётки, OpenVPN GUI / Connect и версия, ключи `.ovpn` (в том числе чужие), туннель, доступность контроллеров домена | `realm` / sssd / winbind, доверие (`adcli testjoin` / `wbinfo -t`), версия `openvpn`, профили в `/etc/openvpn`, `/home` и NetworkManager, туннель, доступность контроллеров по TCP 389 |
 
@@ -62,20 +62,20 @@
 
 ## Быстрый запуск
 
-Однострочники берут файлы из конкретного релиза, а не из `main`. Подставьте нужную версию вместо `v1.2.0`.
+Однострочники берут файлы из конкретного релиза, а не из `main`. Подставьте нужную версию вместо `v1.3.0`.
 
 ### Windows
 
 PowerShell **от администратора**:
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory.ps1')).TrimStart([char]0xFEFF))) -SkipWU
+[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.3.0/inventory.ps1')).TrimStart([char]0xFEFF))) -SkipWU
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory.ps1')).TrimStart([char]0xFEFF))) -Owner company -Config '\\server\share\inventory\config.json' -CsvPath '\\server\share\inventory\inventory.csv'
+[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.3.0/inventory.ps1')).TrimStart([char]0xFEFF))) -Owner company -Config '\\server\share\inventory\config.json' -CsvPath '\\server\share\inventory\inventory.csv'
 ```
 
 > Почему не `irm`: GitHub отдаёт ассеты релиза как `application/octet-stream`, и `Invoke-RestMethod` в Windows PowerShell 5.1
@@ -85,13 +85,13 @@ PowerShell **от администратора**:
 ### Linux
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory.sh | sudo bash -s -- --skip-updates
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.3.0/inventory.sh | sudo bash -s -- --skip-updates
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /mnt/share/inventory/inventory.csv
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.3.0/inventory.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /mnt/share/inventory/inventory.csv
 ```
 
 ### macOS
@@ -99,13 +99,13 @@ curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/downloa
 В «Терминале» (в релизе файл называется `inventory-macos.sh`):
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory-macos.sh | sudo bash -s -- --skip-updates
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.3.0/inventory-macos.sh | sudo bash -s -- --skip-updates
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory-macos.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /Volumes/share/inventory/inventory.csv
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.3.0/inventory-macos.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /Volumes/share/inventory/inventory.csv
 ```
 
 > Ссылки `releases/download/...` открываются без авторизации, только если репозиторий **публичный**.
@@ -118,7 +118,7 @@ curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/downloa
 ### Windows
 
 ```powershell
-$v = 'v1.2.0'; $b = "https://github.com/softsol-pro/workstation-inventory/releases/download/$v"; $f = "$env:TEMP\inventory.ps1"
+$v = 'v1.3.0'; $b = "https://github.com/softsol-pro/workstation-inventory/releases/download/$v"; $f = "$env:TEMP\inventory.ps1"
 $wc = New-Object Net.WebClient; $wc.DownloadFile("$b/inventory.ps1", $f)
 $expected = (($wc.DownloadString("$b/SHA256SUMS") -split "`n" | Where-Object { $_ -match 'inventory\.ps1' }) -split '\s+')[0]
 if ((Get-FileHash $f -Algorithm SHA256).Hash -eq $expected) { powershell -ExecutionPolicy Bypass -File $f -SkipWU } else { Write-Host 'ХЕШ НЕ СОВПАДАЕТ' -ForegroundColor Red }
@@ -127,13 +127,13 @@ if ((Get-FileHash $f -Algorithm SHA256).Hash -eq $expected) { powershell -Execut
 ### Linux
 
 ```bash
-cd "$(mktemp -d)" && v=v1.2.0 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory.sh" -fsSLO "$b/SHA256SUMS" && sha256sum -c --ignore-missing SHA256SUMS && sudo bash inventory.sh --skip-updates
+cd "$(mktemp -d)" && v=v1.3.0 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory.sh" -fsSLO "$b/SHA256SUMS" && sha256sum -c --ignore-missing SHA256SUMS && sudo bash inventory.sh --skip-updates
 ```
 
 ### macOS
 
 ```bash
-cd "$(mktemp -d)" && v=v1.2.0 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory-macos.sh" -fsSLO "$b/SHA256SUMS" && grep inventory-macos.sh SHA256SUMS | shasum -a 256 -c && sudo bash inventory-macos.sh --skip-updates
+cd "$(mktemp -d)" && v=v1.3.0 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory-macos.sh" -fsSLO "$b/SHA256SUMS" && grep inventory-macos.sh SHA256SUMS | shasum -a 256 -c && sudo bash inventory-macos.sh --skip-updates
 ```
 
 ## Запуск с общей папки (без интернета)
@@ -209,6 +209,33 @@ sudo bash /Volumes/share/inventory/inventory-macos.sh --owner company --config /
 В Linux конфиг разбирается через `jq`, а если его нет — через `python3`. Если нет ни того ни другого, скрипт работает без конфига и предупреждает об этом.
 Регэксп `corpVpnKeyPattern` в Linux проверяется как ERE (bash `=~`), поэтому PCRE-конструкции вроде `\d` или `(?i)` там не работают.
 
+## Kaspersky
+
+Если на станции стоит Kaspersky, скрипт показывает его состояние подробно. В CSV и JSON это попадает в колонку «Антивирус»:
+`... | служба работает | защита файлов вкл | базы обновлены 2026-10-20 12:48`.
+
+| Что | Windows (KSOS, Kaspersky Endpoint Security) | Linux (KESL) | macOS |
+|---|---|---|---|
+| служба / процесс работает | служба `AVP*` | служба `kesl` | процесс запущен |
+| постоянная защита файлов | `avp.com STATUS` (File_Monitoring) | `kesl-control --app-info` (File Threat Protection) | — (см. ниже) |
+| компоненты: почта, веб, брандмауэр, контроль программ, сетевые атаки | `avp.com STATUS` | — | — |
+| последнее обновление баз: когда и успешно ли | `avp.com STATISTICS Updater` | запуск задачи обновления | — |
+| возраст баз | дата файлов баз | дата выпуска баз | дата файлов баз |
+| Агент администрирования (Kaspersky Security Center) | `klnagchk` | `klnagchk` | — |
+
+Пороги: базы старше 3 дней — жёлтый, старше 7 дней или обновление завершилось ошибкой — красный и замечание.
+Выключенная постоянная защита — красный и замечание. `avp.com` и `kesl-control` только читают состояние. На Windows права администратора
+и пароль Kaspersky не нужны. Если настройки Kaspersky защищены паролем и `avp.com` не отвечает, будет «нет данных».
+На Linux для `kesl-control` нужен root.
+
+**«Когда станция была на связи».** Скрипт запускается на самой станции, поэтому показывает, когда она последний раз обновила базы,
+то есть выходила на связь с серверами Kaspersky. Список всех станций, включая выключенные, с датой последнего подключения
+есть только в консоли управления. Для KSOS это облачная консоль на my.kaspersky.com. Если станция подключена к Kaspersky Security Center,
+скрипт показывает ответ Агента администрирования.
+
+На macOS документированной консольной команды статуса у Kaspersky нет, поэтому постоянную защиту там стоит смотреть в облачной консоли.
+Windows-часть проверена на KSOS 21.27. Linux- и macOS-части написаны по документации и на живом Kaspersky ещё не проверялись.
+
 ## Серийники
 
 Скрипты показывают серийники всего, что их сообщает: ПК, материнская плата, диски, модули памяти, батарея, ИБП (Linux, через NUT),
@@ -250,7 +277,7 @@ sudo bash /Volumes/share/inventory/inventory-macos.sh --owner company --config /
 ## Пример вывода
 
 ```
-Инвентаризация WS-042 — 19.10.2026 14:27 (inventory.ps1 1.2.0)
+Инвентаризация WS-042 — 19.10.2026 14:27 (inventory.ps1 1.3.0)
 Конфиг: \\server\share\inventory\config.json
 
 === Общее ===
@@ -342,7 +369,7 @@ CI запускает эти проверки на каждый коммит: Wi
 1. Поднять версию в `$ScriptVersion` (`windows/inventory.ps1`) и `VERSION` (`linux/inventory.sh`, `macos/inventory.sh`).
 2. Закоммитить, поставить тег и запушить:
    ```bash
-   git tag v1.2.1 && git push origin v1.2.1
+   git tag v1.3.1 && git push origin v1.3.1
    ```
 3. Workflow [release.yml](.github/workflows/release.yml) проверит, что версия во всех трёх скриптах совпадает с тегом, и приложит к релизу
    `inventory.ps1`, `inventory.sh`, `inventory-macos.sh` и `SHA256SUMS`.

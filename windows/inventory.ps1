@@ -23,7 +23,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
-$ScriptVersion = '1.2.0'
+$ScriptVersion = '1.3.0'
 
 # ================= сроки поддержки Windows =================
 # ОБНОВЛЯТЬ РАЗ В ГОД — когда выходит новая версия Windows 11 (обычно осенью):
@@ -87,6 +87,36 @@ function Read-Edid([byte[]]$E) {
         if ($E[$off + 3] -eq 0xFF) { $r.Serial = $txt } elseif ($E[$off + 3] -eq 0xFC) { $r.Name = $txt }
     }
     $r
+}
+# ---------- Kaspersky: консольная утилита avp.com (работает без прав админа и без пароля, ничего не меняет) ----------
+# Разбор вывода вынесен в функции: их проверяет tests/check-windows.ps1 на сохранённом выводе (tests/fixtures).
+# avp.com STATUS → @{ File_Monitoring = 'running'; Firewall = 'running'; ... }
+function ConvertFrom-AvpStatus([string[]]$Lines) {
+    $t = @{}
+    foreach ($l in $Lines) {
+        if ($l -match '^\s*([A-Za-z][\w.-]*)\s+(running|enabled|disabled|stopped|completed|failed|starting|paused|stopping)\b') { $t[$Matches[1]] = $Matches[2] }
+    }
+    $t
+}
+# avp.com STATISTICS Updater → @{ Finish = [datetime] или $null; Ok = $true / $false / $null }
+function ConvertFrom-AvpUpdater([string[]]$Lines) {
+    $r = @{ Finish = $null; Ok = $null }
+    foreach ($l in $Lines) {
+        if ($l -match 'Time Finish:\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})') { $r.Finish = [datetime]::ParseExact($Matches[1], 'yyyy-MM-dd HH:mm:ss', [cultureinfo]::InvariantCulture) }
+        if ($l -match 'succeeded|успешно') { $r.Ok = $true } elseif ($l -match '\bfailed\b|\berror\b|ошибк') { $r.Ok = $false }
+    }
+    $r
+}
+# запуск консольной утилиты с таймаутом, вывод — массив строк
+function Invoke-Console([string]$Exe, [string[]]$Arguments, [int]$TimeoutSec = 30) {
+    $o = [IO.Path]::GetTempFileName(); $e = [IO.Path]::GetTempFileName()
+    try {
+        $sp = @{ FilePath = $Exe; NoNewWindow = $true; PassThru = $true; RedirectStandardOutput = $o; RedirectStandardError = $e }
+        if ($Arguments) { $sp.ArgumentList = $Arguments }
+        $p = Start-Process @sp
+        if (-not $p.WaitForExit($TimeoutSec * 1000)) { try { $p.Kill() } catch {}; return @() }
+        @(Get-Content $o -Encoding Default)
+    } catch { @() } finally { Remove-Item $o, $e -ErrorAction SilentlyContinue }
 }
 # сырой EDID монитора из реестра (права админа не нужны): DISPLAY\PHL0918\5&2d1b&0&UID4352_0 → ...\Device Parameters\EDID
 function Get-MonitorEdid([string]$InstanceName) {
@@ -530,7 +560,8 @@ foreach ($a in $av) {
 if ($ExpectedAv) {
     $avRx  = [regex]::Escape($ExpectedAv)
     $avSvc = @(Get-Service | Where-Object { $_.DisplayName -match $avRx -or ($ExpectedAv -match 'Kaspersky' -and $_.Name -match '^AVP') })
-    if ($avSvc.Count) {
+    # для Kaspersky службу подробнее покажет блок ниже
+    if ($avSvc.Count -and -not ($ExpectedAv -match 'Kaspersky' -and @(Get-Service 'AVP*' -ErrorAction SilentlyContinue).Count)) {
         $running = @($avSvc | Where-Object { "$($_.Status)" -eq 'Running' }).Count
         Line "Служба $ExpectedAv" (($avSvc | ForEach-Object { "$($_.Name): $($_.Status)" }) -join ', ') $(if ($running) { 'ok' } else { 'bad' })
     }
@@ -545,6 +576,71 @@ if ($ExpectedAv) {
 } else {
     if ($av.Count -and -not $activeAv.Count) { Line 'Активный антивирус' 'нет' 'bad' 'Нет включённого антивируса' }
     $Report['Антивирус'] = $(if ($activeAv.Count) { "активен: $($activeAv -join ', ')" } else { 'нет активного' })
+}
+
+# ---------- Kaspersky на станции: постоянная защита, компоненты, обновление баз ----------
+# Работает для Kaspersky Small Office Security и Kaspersky Endpoint Security. «Когда станция была на связи» для всех ПК
+# сразу видно только в консоли управления (KSOS — my.kaspersky.com); здесь — когда эта станция последний раз обновила базы.
+$kSvcAll = @(Get-CimInstance Win32_Service -Filter "Name LIKE 'AVP%'" -ErrorAction SilentlyContinue)
+$kSvc = $kSvcAll | Where-Object { $_.State -eq 'Running' } | Select-Object -First 1
+if (-not $kSvc) { $kSvc = $kSvcAll | Select-Object -First 1 }
+if ($kSvc) {
+    $kExe = if ("$($kSvc.PathName)" -match '^"([^"]+)"') { $Matches[1] } else { ("$($kSvc.PathName)" -split '\s+')[0] }
+    $kDir = Split-Path $kExe -Parent
+    $avpCom = @((Join-Path $kDir 'avp.com'), (Join-Path (Split-Path $kDir -Parent) 'avp.com')) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $kName = ("$($kSvc.DisplayName)" -replace '\s+Service\b.*$', '').Trim()
+    $kVer  = if ($avpCom) { (Get-Item $avpCom).VersionInfo.ProductVersion } else { '' }
+    $kRun  = $kSvc.State -eq 'Running'
+    Line 'Kaspersky' ("{0} {1} | служба {2}: {3}" -f $kName, $kVer, $kSvc.Name, $(if ($kRun) { 'работает' } else { $kSvc.State })) $(if ($kRun) { 'ok' } else { 'bad' }) $(if (-not $kRun) { "Служба $kName не запущена" })
+
+    $fm = $null; $up = @{ Finish = $null; Ok = $null }
+    if ($avpCom -and $kRun) {
+        $ts = ConvertFrom-AvpStatus (Invoke-Console $avpCom @('STATUS'))
+        if ($ts.Count) {
+            $fm = $ts['File_Monitoring']
+            Line 'Постоянная защита файлов' $(if ($fm -eq 'running') { 'включена' } elseif ($fm) { "ВЫКЛЮЧЕНА ($fm)" } else { 'нет данных' }) $(if ($fm -eq 'running') { 'ok' } elseif ($fm) { 'bad' }) $(if ($fm -and $fm -ne 'running') { "${kName}: постоянная защита файлов выключена" })
+            $compNames = [ordered]@{ Mail_Monitoring = 'почта'; Web_Monitoring = 'веб'; httpscan = 'веб-трафик'; Firewall = 'брандмауэр'; Hips = 'контроль программ'; ids = 'защита от сетевых атак' }
+            $comp = foreach ($k in $compNames.Keys) { if ($ts.ContainsKey($k)) { "$($compNames[$k]): $(if ($ts[$k] -eq 'running') { 'вкл' } else { $ts[$k] })" } }
+            if ($comp) { Line 'Компоненты защиты' ($comp -join ', ') $(if (@($comp | Where-Object { $_ -notlike '*: вкл' }).Count) { 'warn' } else { 'ok' }) }
+        } else {
+            Line 'Постоянная защита файлов' 'нет данных (avp.com не ответил — возможно, настройки защищены паролем)' 'warn'
+        }
+        $up = ConvertFrom-AvpUpdater (Invoke-Console $avpCom @('STATISTICS', 'Updater'))
+    } elseif (-not $avpCom) {
+        Line 'Постоянная защита файлов' 'нет данных (avp.com не найден)' 'warn'
+    }
+
+    # базы на диске: самый свежий файл в ProgramData\Kaspersky Lab\<служба>\Bases (или в любой папке Bases рядом)
+    $bDirs = @(Join-Path "$env:ProgramData\Kaspersky Lab" "$($kSvc.Name)\Bases") + @(Get-ChildItem "$env:ProgramData\Kaspersky Lab" -Directory -ErrorAction SilentlyContinue | ForEach-Object { Join-Path $_.FullName 'Bases' })
+    $bDir  = $bDirs | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $bNew  = if ($bDir) { Get-ChildItem $bDir -File -Recurse -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1 }
+    $lastUpd = if ($up.Finish) { $up.Finish } elseif ($bNew) { $bNew.LastWriteTime } else { $null }
+    if ($lastUpd) {
+        $kd = [math]::Floor(((Get-Date) - $lastUpd).TotalDays)
+        $res = if ($up.Ok -eq $true) { 'успешно' } elseif ($up.Ok -eq $false) { 'С ОШИБКОЙ' } elseif ($up.Finish) { 'результат неизвестен' } else { 'по дате файлов баз' }
+        $kst = if ($up.Ok -eq $false -or $kd -gt 7) { 'bad' } elseif ($kd -gt 3) { 'warn' } else { 'ok' }
+        $kis = if ($up.Ok -eq $false) { "${kName}: последнее обновление баз завершилось ошибкой" } elseif ($kd -gt 7) { "${kName}: базы не обновлялись $kd дн." }
+        Line 'Последнее обновление баз' ("{0:dd.MM.yyyy HH:mm} ({1} дн. назад), {2}" -f $lastUpd, $kd, $res) $kst $kis
+        if ($bNew -and $up.Finish) { Line 'Файлы баз' ("от {0:dd.MM.yyyy HH:mm}" -f $bNew.LastWriteTime) }
+    } else {
+        Line 'Последнее обновление баз' 'нет данных' 'warn'
+    }
+
+    # устаревшие записи в Центре безопасности Windows от прежних версий (на защиту не влияют)
+    $kDup = @(Get-CimInstance -Namespace root\SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction SilentlyContinue | Where-Object { $_.displayName -match 'Kaspersky' }).Count - 1
+    if ($kDup -gt 0) { Line 'Записи Центра безопасности' "$kDup устаревш. от прежних версий Kaspersky — на защиту не влияют" }
+
+    # Агент администрирования (только если станция подключена к Kaspersky Security Center)
+    $klchk = @("${env:ProgramFiles(x86)}\Kaspersky Lab\NetworkAgent\klnagchk.exe", "$env:ProgramFiles\Kaspersky Lab\NetworkAgent\klnagchk.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($klchk) {
+        $kl = @(Invoke-Console $klchk @() 60 | Where-Object { $_ -match 'Administration Server|Сервер[а-я]* администрирования|synchroniz|синхрониз|connect|соедин' } | ForEach-Object { $_.Trim() } | Select-Object -First 3)
+        Line 'Агент администрирования' $(if ($kl.Count) { $kl -join ' | ' } else { 'установлен, klnagchk не ответил (может требовать прав администратора)' })
+    } else {
+        Line 'Агент администрирования' 'не установлен (KSOS управляется из облачной консоли — статус «на связи» по всем ПК там)'
+    }
+
+    $Report['Антивирус'] = ("{0} | служба {1} | защита файлов {2} | базы обновлены {3}" -f $Report['Антивирус'], $(if ($kRun) { 'работает' } else { 'НЕ РАБОТАЕТ' }),
+        $(if ($fm -eq 'running') { 'вкл' } elseif ($fm) { 'ВЫКЛ' } else { '?' }), $(if ($lastUpd) { $lastUpd.ToString('yyyy-MM-dd HH:mm') } else { '?' }))
 }
 
 # ================= локальные админы =================

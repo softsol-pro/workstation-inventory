@@ -27,6 +27,28 @@ function Test-Word([string]$Text, [string]$Word) {
 
 Write-Host "`nПроверка $Script" -ForegroundColor Cyan
 
+# ---------- разбор вывода Kaspersky avp.com на сохранённых примерах (работает и без Kaspersky) ----------
+Write-Host "`nРазбор вывода avp.com (tests\fixtures)" -ForegroundColor White
+$ast = [Management.Automation.Language.Parser]::ParseFile($Script, [ref]$null, [ref]$null)
+foreach ($fn in 'ConvertFrom-AvpStatus', 'ConvertFrom-AvpUpdater') {
+    $def = $ast.FindAll({ $args[0] -is [Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq $fn }, $true) | Select-Object -First 1
+    if ($def) { . ([scriptblock]::Create($def.Extent.Text)) } else { Check "функция $fn есть в скрипте" $false 'не найдена' }
+}
+$fx = Join-Path $PSScriptRoot 'fixtures'
+function Read-Fixture([string]$Name) { @([IO.File]::ReadAllLines((Join-Path $fx $Name), [Text.Encoding]::UTF8)) }
+$st = ConvertFrom-AvpStatus (Read-Fixture 'avp-status.txt')
+Check 'STATUS: постоянная защита файлов — running' ($st['File_Monitoring'] -eq 'running') "File_Monitoring = $($st['File_Monitoring'])"
+Check 'STATUS: брандмауэр и почта разобраны' ($st['Firewall'] -eq 'running' -and $st['Mail_Monitoring'] -eq 'running') "Firewall = $($st['Firewall']), Mail = $($st['Mail_Monitoring'])"
+Check 'STATUS: задач больше 30' ($st.Count -gt 30) "задач: $($st.Count)"
+$st = ConvertFrom-AvpStatus (Read-Fixture 'avp-status-off.txt')
+Check 'STATUS: выключенная защита распознаётся' ($st['File_Monitoring'] -eq 'stopped') "File_Monitoring = $($st['File_Monitoring'])"
+$uo = ConvertFrom-AvpUpdater (Read-Fixture 'avp-updater.txt')
+Check 'Updater: время и успех' ($uo.Ok -eq $true -and $uo.Finish -eq [datetime]'2026-10-20 12:48:58') "Ok = $($uo.Ok), Finish = $($uo.Finish)"
+$uo = ConvertFrom-AvpUpdater (Read-Fixture 'avp-updater-failed.txt')
+Check 'Updater: ошибка обновления распознаётся' ($uo.Ok -eq $false) "Ok = $($uo.Ok)"
+$uo = ConvertFrom-AvpUpdater @()
+Check 'Updater: пустой вывод — нет данных, а не «успешно»' ($null -eq $uo.Ok -and $null -eq $uo.Finish) "Ok = $($uo.Ok)"
+
 # ---------- компьютер компании: сверка с независимыми источниками ----------
 Write-Host "`nРежим «компании»" -ForegroundColor White
 $cj = Join-Path $tmp 'company.json'
@@ -75,6 +97,15 @@ if (Test-Path $cj) {
         Check 'USB-клавиатура из Win32_PnPEntity попала в отчёт' ("$($kbRow.Value)" -ne 'не найдена') "USB-клавиатур: $($usbKb.Count), в отчёте «$($kbRow.Value)»"
     }
     foreach ($r in $kb) { Write-Host "        $($r.Name): $($r.Value)" -ForegroundColor DarkGray }
+    # Kaspersky на этом ПК: сверка с avp.com напрямую и со службой
+    $kSvcChk = Get-CimInstance Win32_Service -Filter "Name LIKE 'AVP%' AND State = 'Running'" | Select-Object -First 1
+    if ($kSvcChk) {
+        $kRow = $c.details | Where-Object { $_.Name -eq 'Постоянная защита файлов' } | Select-Object -First 1
+        Check 'Kaspersky: строка о постоянной защите есть' ([bool]$kRow) 'нет строки'
+        $uRow = $c.details | Where-Object { $_.Name -eq 'Последнее обновление баз' } | Select-Object -First 1
+        Check 'Kaspersky: строка об обновлении баз есть' ($uRow -and "$($uRow.Value)" -ne 'нет данных') "«$($uRow.Value)»"
+        Write-Host ("        {0}: {1}`n        {2}: {3}" -f $kRow.Name, $kRow.Value, $uRow.Name, $uRow.Value) -ForegroundColor DarkGray
+    }
     Check 'в отчёте больше 20 строк' (@($c.details).Count -gt 20) "строк: $(@($c.details).Count)"
     Write-Host ("        права администратора: {0}; неполные проверки: {1}" -f $c.isAdmin, $(if ($c.incomplete) { $c.incomplete -join ', ' } else { 'нет' })) -ForegroundColor DarkGray
 }

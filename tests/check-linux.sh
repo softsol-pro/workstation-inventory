@@ -34,6 +34,20 @@ fi
 
 printf '\n\e[36mПроверка %s\e[0m\n' "$SCRIPT"
 
+# ---------- разбор вывода kesl-control на примере (работает и без Kaspersky) ----------
+# Пример составлен по документации KESL 12 (tests/fixtures/kesl-app-info.txt); на живом KESL формат стоит сверить.
+printf '\nРазбор kesl-control --app-info (tests/fixtures)\n'
+sed -n '1,/^main() {/p' "$SCRIPT" | sed '$d' > "$TMP/lib.sh"
+# shellcheck disable=SC1091
+. "$TMP/lib.sh"
+IFS=$'\x1f' read -r kv kfp kdb kup <<< "$(kesl_parse < "$(dirname "$0")/fixtures/kesl-app-info.txt")"
+chk 'версия' "«$kv»" [ "$kv" = 12.1.0.1297 ]
+chk 'постоянная защита файлов' "«$kfp»" [ "$kfp" = Running ]
+chk 'дата выпуска баз' "«$kdb» → «$(first_date "$kdb")»" [ "$(first_date "$kdb")" = '2026-10-19 21:04:00' ]
+chk 'последний запуск обновления' "«$kup»" [ "$(first_date "$kup")" = '2026-10-20 06:00:12' ]
+IFS=$'\x1f' read -r kv kfp kdb kup <<< "$(printf 'File Threat Protection: Stopped\n' | kesl_parse)"
+chk 'выключенная защита распознаётся' "«$kfp»" [ "$kfp" = Stopped ]
+
 # ---------- компьютер компании: сверка с независимыми источниками ----------
 printf '\nРежим «компании»\n'
 C=$TMP/company.json

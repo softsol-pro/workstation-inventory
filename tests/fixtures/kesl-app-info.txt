@@ -1,0 +1,12 @@
+Name:                                       Kaspersky Endpoint Security for Linux
+Version:                                    12.1.0.1297
+License ID:                                 00000000-0000-0000-0000-000000000000
+Installation date:                          2026-03-02 09:15:44
+Last release date of databases:             2026-10-19 21:04:00
+Anti-virus database records:                31415926
+Last run date of the Update task:           2026-10-20 06:00:12
+Application update state:                   No application updates available
+Integration with Kaspersky Security Center:  Offline
+File Threat Protection:                     Running
+Web Threat Protection:                      Stopped
+Network Threat Protection:                  Running
