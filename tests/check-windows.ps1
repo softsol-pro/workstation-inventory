@@ -59,6 +59,16 @@ if (Test-Path $cj) {
     if ($hf -and $s.'Последнее обновление') {
         Check 'последнее обновление не раньше последнего KB' ([datetime]$s.'Последнее обновление' -ge $hf.InstalledOn.Date) "в отчёте $($s.'Последнее обновление'), Get-HotFix $($hf.InstalledOn.ToString('yyyy-MM-dd'))"
     }
+    # серийники дисков — сверка с Get-Disk (другой интерфейс, чем Get-PhysicalDisk в скрипте)
+    foreach ($gd in @(Get-Disk)) {
+        $gsn = "$($gd.SerialNumber)".Trim().TrimEnd('.').Trim()
+        if ($gsn.Length -lt 4 -or $gsn -match '^0+$') { continue }
+        $row = $c.details | Where-Object { $_.Section -eq 'Диски' -and $_.Name -eq "Диск $($gd.Number)" } | Select-Object -First 1
+        Check "серийник диска $($gd.Number) совпадает с Get-Disk" ("$($row.Value)".Contains($gsn)) "в отчёте «$($row.Value)», Get-Disk «$gsn»"
+    }
+    $kb = @($c.details | Where-Object { $_.Name -in 'Клавиатура', 'Мышь / тачпад' })
+    Check 'раздел клавиатуры и мыши есть' ($kb.Count -ge 2) "строк: $($kb.Count)"
+    foreach ($r in $kb) { Write-Host "        $($r.Name): $($r.Value)" -ForegroundColor DarkGray }
     Check 'в отчёте больше 20 строк' (@($c.details).Count -gt 20) "строк: $(@($c.details).Count)"
     Write-Host ("        права администратора: {0}; неполные проверки: {1}" -f $c.isAdmin, $(if ($c.incomplete) { $c.incomplete -join ', ' } else { 'нет' })) -ForegroundColor DarkGray
 }
@@ -76,9 +86,24 @@ if (Test-Path $pj) {
     $cs = Get-CimInstance Win32_ComputerSystem
     $secrets = @($env:COMPUTERNAME, $env:USERNAME, "$($cs.UserName)".Split('\')[-1], "$((Get-CimInstance Win32_BIOS).SerialNumber)".Trim())
     if ($cs.PartOfDomain) { $secrets += $cs.Domain, $env:USERDOMAIN }
+    $secrets += @(Get-PhysicalDisk | ForEach-Object { "$($_.SerialNumber)".Trim().TrimEnd('.') })
+    $secrets += "$((Get-CimInstance Win32_BaseBoard | Select-Object -First 1).SerialNumber)".Trim()
+    $secrets += @(Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID | ForEach-Object { (($_.SerialNumberID | Where-Object { $_ }) | ForEach-Object { [char]$_ }) -join '' })
+    $secrets += @(Get-CimInstance Win32_PhysicalMemory | ForEach-Object { "$($_.SerialNumber)".Trim() })
     $secrets = $secrets | Where-Object { "$_".Trim().Length -ge 4 -and $_ -notmatch '^(0+|To be filled.*|Default string|System Serial Number|None|Not Specified)$' } | Sort-Object -Unique
     foreach ($x in $secrets) { Check "нигде нет «$x»" (-not (Test-Word $all $x)) 'найдено в выводе, CSV или JSON' }
 }
+
+# ---------- CSV от старой версии: строка должна уйти в -v2.csv ----------
+Write-Host "`nCSV с колонками от старой версии" -ForegroundColor White
+$old = Join-Path $tmp 'old.csv'
+[IO.File]::WriteAllText($old, "`"Дата`";`"ПК`"`r`n`"x`";`"y`"`r`n", (New-Object Text.UTF8Encoding $true))
+$null = Invoke-Inventory @('-Owner', 'company', '-SkipWU', '-CsvPath', $old)
+$v2 = Join-Path $tmp 'old-v2.csv'
+Check 'старый файл не тронут' (@(Get-Content $old).Count -eq 2) "строк: $(@(Get-Content $old).Count)"
+Check 'строка записана в old-v2.csv с новыми колонками' ((Test-Path $v2) -and "$(Get-Content $v2 -TotalCount 1 -Encoding UTF8)" -like '*"Клавиатура и мышь"') 'old-v2.csv нет или заголовок другой'
+$null = Invoke-Inventory @('-Owner', 'company', '-SkipWU', '-CsvPath', $old)
+Check 'повторный запуск дописывает в тот же old-v2.csv' ((Test-Path $v2) -and @(Get-Content $v2).Count -eq 3 -and -not (Test-Path (Join-Path $tmp 'old-v3.csv'))) "строк в old-v2: $(@(Get-Content $v2).Count)"
 
 # ---------- без консоли и без -Owner ----------
 Write-Host "`nБез консоли и без -Owner" -ForegroundColor White

@@ -13,7 +13,7 @@
 # Нужен bash 4+. Всё необязательное (dmidecode, smartctl, edid-decode, jq/python3, lpstat, upsc,
 # nmcli, realm, ...) проверяется на наличие; если чего-то нет — в выводе будет «нет данных».
 
-VERSION='1.1.0'
+VERSION='1.2.0'
 
 # ================= сроки поддержки дистрибутивов =================
 # ОБНОВЛЯТЬ РАЗ В ГОД — когда выходит новая LTS Ubuntu / новый Debian.
@@ -45,7 +45,7 @@ D_SEC=(); D_NAME=(); D_VAL=(); D_ST=()
 SECTION=''
 REPORT_KEYS=('Дата' 'ПК' 'Пользователь' 'Модель' 'Серийник' 'Тип' 'CPU' 'ОЗУ ГБ' 'ОЗУ распаяно/слоты' 'Диски' 'C: свободно ГБ'
     'Мониторы' 'Принтеры' 'ИБП/батарея' 'Windows' 'Сборка' 'Поддержка до' 'Последнее обновление' 'Ожидают обновлений'
-    'Антивирус' 'Польз. админ' 'Домен/VPN' 'OpenVPN' 'Замечания')
+    'Антивирус' 'Польз. админ' 'Домен/VPN' 'OpenVPN' 'Замечания' 'Клавиатура и мышь')
 declare -A REPORT=()
 
 section() { SECTION=$1; printf '\n%s=== %s ===%s\n' "$C_HEAD" "$1" "$C_0"; }
@@ -136,10 +136,19 @@ for x in ([] if v is None else v if isinstance(v, list) else [v]):
 
 # ================= CSV / JSON =================
 csv_q() { local s=${1//\"/\"\"}; printf '"%s"' "$s"; }
+CSV_WRITTEN=''
 write_csv() {
-    local f=$1 hdr='' row='' k
+    local f=$1 hdr='' row='' k first n=1 base ext
     for k in "${REPORT_KEYS[@]}"; do hdr+="$(csv_q "$k");"; row+="$(csv_q "${REPORT[$k]}");"; done
     hdr=${hdr%;}; row=${row%;}
+    # если в файле заголовок от старой версии (другой набор колонок) — пишем рядом в name-v2.csv, name-v3.csv…
+    base=${1%.*}; ext=${1##*.}; [ "$ext" = "$1" ] && ext='' || ext=".$ext"
+    while [ -s "$f" ] && [ "$n" -lt 9 ]; do
+        first=$(head -1 "$f" | tr -d '\r'); first=${first#$'\xEF\xBB\xBF'}
+        [ "$first" = "$hdr" ] && break
+        n=$((n + 1)); f="$base-v$n$ext"
+    done
+    CSV_WRITTEN=$f
     {
         if [ ! -s "$f" ]; then printf '\xEF\xBB\xBF%s\r\n' "$hdr"; fi
         printf '%s\r\n' "$row"
@@ -195,8 +204,16 @@ mem_verdict() {
     fi
 }
 
+# серийник без заглушек производителя
+clean_sn() {
+    local s; s=$(trim "$1"); s=${s%.}
+    case $s in ''|'Not Specified'|'Not Available'|Unknown|None|'[Empty]'|'To be filled'*|'Default string'|'System Serial Number'|'Base Board Serial Number'|N/A|-) s='' ;; esac
+    [[ $s =~ ^0+$ ]] && s=''
+    printf '%s' "$s"
+}
+
 # ================= EDID =================
-# печатает: производитель|имя|серийник|год
+# печатает: производитель|имя|серийник-текст (дескриптор 0xFF)|числовой код (байты 12–15)|год
 edid_info() {
     local f=$1 hex v c ch mfr='' name='' sn='' year off i s tag
     local -a b
@@ -215,15 +232,12 @@ edid_info() {
         printf -v s '%b' "$s"; s=$(trim "$s")
         case $tag in fc) name=$s ;; ff) sn=$s ;; esac
     done
-    if [ -z "$sn" ]; then
-        v=$(( 16#${b[15]}${b[14]}${b[13]}${b[12]} ))
-        [ "$v" -gt 0 ] && sn=$v
-    fi
+    v=$(( 16#${b[15]}${b[14]}${b[13]}${b[12]} ))
     if have edid-decode; then
         s=$(edid-decode "$f" 2>/dev/null | sed -n "s/.*Display Product Name: *//p" | head -1 | tr -d "'\"")
         [ -n "$s" ] && name=$(trim "$s")
     fi
-    printf '%s|%s|%s|%s' "$mfr" "$name" "$sn" "$year"
+    printf '%s|%s|%s|%s|%s' "$mfr" "$name" "$(clean_sn "$sn")" "$v" "$year"
 }
 
 main() {
@@ -340,6 +354,13 @@ main() {
     line 'Производитель' "${vendor:-нет данных}"
     line 'Модель' "${model:-нет данных}"
     line 'Серийный номер' "$(hide "${serial:-нет данных}")"
+    local bbv bbn bbs
+    bbv=$(dmi board_vendor); bbn=$(dmi board_name)
+    if [ -n "$bbv$bbn" ]; then
+        if [ -r /sys/class/dmi/id/board_serial ]; then bbs=$(clean_sn "$(dmi board_serial)"); bbs=$( [ -n "$bbs" ] && hide "$bbs" || echo нет )
+        else bbs='нужен root'; fi
+        line 'Материнская плата' "$(trim "$bbv $bbn") | S/N $bbs"
+    fi
     if [ -z "$chassis" ]; then line 'Тип' 'нет данных'
     elif [ "$is_laptop" = 1 ]; then line 'Тип' 'Ноутбук'
     else line 'Тип' 'Настольный / прочее'; fi
@@ -407,7 +428,8 @@ main() {
         mem_verdict "$mtype" "$part" "$sn" "$v" "$ff" "$is_desktop"
         case $MV_KIND in sold) sold=$((sold + gbm)) ;; slot) slot=$((slot + gbm)) ;; *) unk=$((unk + gbm)) ;; esac
         [ "$MV_SURE" = 1 ] || guess=1
-        line "$(trim "$bank $loc")" "$gbm ГБ $mtype-${speed%% *} | $mfr $part | $MV_TEXT"
+        sn=$(clean_sn "$sn")
+        line "$(trim "$bank $loc")" "$gbm ГБ $mtype-${speed%% *} | $mfr $part | S/N $( [ -n "$sn" ] && hide "$sn" || echo нет ) | $MV_TEXT"
     done
     if [ "${#good[@]}" -gt 0 ]; then
         slots_bios=$(dmidecode -t 16 2>/dev/null | awk -F': ' '/Number Of Devices/ { s += $2 } END { print s }')
@@ -429,11 +451,12 @@ main() {
     # ================= диски =================
     section 'Диски'
     local re name rota tran bytes dmodel dtype hs health dlist=() smart_note=0
-    re='^NAME="([^"]*)" TYPE="([^"]*)" ROTA="([^"]*)" TRAN="([^"]*)" SIZE="([^"]*)" MODEL="(.*)"$'
+    local dsn
+    re='^NAME="([^"]*)" TYPE="([^"]*)" ROTA="([^"]*)" TRAN="([^"]*)" SIZE="([^"]*)" SERIAL="([^"]*)" MODEL="(.*)"$'
     if have lsblk; then
         while IFS= read -r l; do
             [[ $l =~ $re ]] || continue
-            name=${BASH_REMATCH[1]}; rota=${BASH_REMATCH[3]}; tran=${BASH_REMATCH[4]}; bytes=${BASH_REMATCH[5]}; dmodel=$(trim "${BASH_REMATCH[6]}")
+            name=${BASH_REMATCH[1]}; rota=${BASH_REMATCH[3]}; tran=${BASH_REMATCH[4]}; bytes=${BASH_REMATCH[5]}; dsn=$(clean_sn "${BASH_REMATCH[6]}"); dmodel=$(trim "${BASH_REMATCH[7]}")
             [ "${BASH_REMATCH[2]}" = disk ] || continue
             case $name in loop*|ram*|zram*|sr*|fd*) continue ;; esac
             if [ "$tran" = nvme ] || [[ $name == nvme* ]]; then dtype='SSD NVMe'; tran=nvme
@@ -447,9 +470,9 @@ main() {
                 case $health in PASSED|OK) hs=ok ;; '') health='SMART: нет данных' ;; *) hs=bad ;; esac
             elif have smartctl; then health='SMART: нужен root'; incomplete 'SMART'
             else health='SMART: нет данных'; smart_note=1; fi
-            line "Диск $name" "${dmodel:-?} | $dtype | $size ГБ | ${tran^^} | $health" "$hs" "$([ "$hs" = bad ] && echo "Диск ${dmodel:-$name}: SMART $health")"
-            [ "$tran" = usb ] || dlist+=("$dtype $size ГБ")
-        done < <(lsblk -d -b -P -o NAME,TYPE,ROTA,TRAN,SIZE,MODEL 2>/dev/null)
+            line "Диск $name" "${dmodel:-?} | $dtype | $size ГБ | ${tran^^} | S/N $( [ -n "$dsn" ] && hide "$dsn" || echo нет ) | $health" "$hs" "$([ "$hs" = bad ] && echo "Диск ${dmodel:-$name}: SMART $health")"
+            [ "$tran" = usb ] || dlist+=("$dtype $size ГБ$( [ -n "$dsn" ] && [ "$PERSONAL" != 1 ] && echo " (S/N $dsn)")")
+        done < <(lsblk -d -b -P -o NAME,TYPE,ROTA,TRAN,SIZE,SERIAL,MODEL 2>/dev/null)
         [ "${#dlist[@]}" -eq 0 ] && line 'Диски' 'не определены'
     else
         line 'Диски' 'нет данных (lsblk не установлен)'
@@ -476,17 +499,22 @@ main() {
 
     # ================= периферия =================
     section 'Мониторы и периферия'
-    local e info mname msn myear disp mons=() i=0 conn
+    local e info mname msn mnum myear disp mons=() i=0 conn msout
     for e in /sys/class/drm/*/edid; do
         [ -s "$e" ] || continue
         info=$(edid_info "$e") || continue
         i=$((i + 1))
-        IFS='|' read -r mfr mname msn myear <<< "$info"
+        IFS='|' read -r mfr mname msn mnum myear <<< "$info"
         conn=${e%/edid}; conn=${conn##*/}; conn=${conn#card[0-9]-}
         [ -z "$mname" ] && mname='(встроенный / без имени)'
         if [ -n "$mfr" ] && [[ $mname == "$mfr"* ]]; then disp=$mname; else disp=$(trim "$mfr $mname"); fi
-        line "Монитор $i" "$disp | S/N $(hide "${msn:-?}") | $myear г. | $conn"
-        mons+=("$disp")
+        # серийник: текст из EDID (обычно совпадает с наклейкой или её началом) + числовой код EDID
+        if [ -n "$msn" ] && [ "${mnum:-0}" -gt 0 ] && [ "$msn" != "$mnum" ]; then msout="$msn (код EDID $mnum)"
+        elif [ -n "$msn" ]; then msout=$msn
+        elif [ "${mnum:-0}" -gt 0 ]; then msout="нет в EDID (код EDID $mnum)"
+        else msout='нет'; fi
+        line "Монитор $i" "$disp | S/N $(hide "$msout") | $myear г. | $conn"
+        if [ -n "$msn" ] && [ "$PERSONAL" != 1 ]; then mons+=("$disp (S/N $msn)"); else mons+=("$disp"); fi
     done
     [ "$i" = 0 ] && line 'Мониторы' 'не определены'
     REPORT['Мониторы']=$(join_by ', ' "${mons[@]}")
@@ -519,7 +547,8 @@ main() {
         u=$(upsc -l 2>/dev/null | head -1)
         if [ -n "$u" ]; then
             ups=$(upsc "$u" ups.model 2>/dev/null); uc=$(upsc "$u" battery.charge 2>/dev/null)
-            ups="${ups:-$u}${uc:+ | заряд $uc%}"
+            l=$(clean_sn "$(upsc "$u" ups.serial 2>/dev/null || upsc "$u" device.serial 2>/dev/null)")
+            ups="${ups:-$u}${uc:+ | заряд $uc%}${l:+ | S/N $(hide "$l")}"
         fi
     fi
     if [ -z "$ups" ] && have lsusb; then
@@ -533,7 +562,8 @@ main() {
             [ -z "$bfull" ] && { bfull=$(readf "$bat/charge_full"); bdes=$(readf "$bat/charge_full_design"); }
             [ -n "$bfull" ] && [ "${bdes:-0}" -gt 0 ] && wear=$(pct "$bfull" "$bdes")
             if [ -n "$wear" ] && [ "$wear" -lt 60 ]; then wst=warn; else wst=ok; fi
-            line 'Батарея' "заряд ${bcap:-?}%${wear:+, ёмкость $wear% от заводской}" "$wst"
+            l=$(trim "$(readf "$bat/manufacturer") $(readf "$bat/model_name")"); u=$(clean_sn "$(readf "$bat/serial_number")")
+            line 'Батарея' "заряд ${bcap:-?}%${wear:+, ёмкость $wear% от заводской}${l:+ | $l} | S/N $( [ -n "$u" ] && hide "$u" || echo нет )" "$wst"
             if [ -n "$wear" ]; then REPORT['ИБП/батарея']="батарея $wear%"; else REPORT['ИБП/батарея']='батарея'; fi
         else
             line 'Батарея' 'нет данных'
@@ -543,6 +573,54 @@ main() {
         if [ -n "$ups" ]; then line 'ИБП' "$ups" ok; REPORT['ИБП/батарея']=$ups
         else line 'ИБП' 'не обнаружен (или подключён без USB-кабеля)' warn; REPORT['ИБП/батарея']='нет'; fi
     fi
+
+    # ---------- клавиатура и мышь ----------
+    # /proc/bus/input/devices: клавиатуры — обработчик kbd (+ leds или «keyboard» в имени), мыши — обработчик mouse.
+    # Имя, производителя и серийник берём у самого USB-устройства в /sys, у Bluetooth серийник — адрес устройства.
+    local noise='Power Button|Sleep Button|Lid Switch|Video Bus|PC Speaker|HDA |HDMI|DisplayPort|Headphone|Headset|Mic|Speaker|Consumer Control|System Control|WMI|[Hh]otkey|Extra Buttons|Intel HID|gpio-keys|Wireless hotkeys|Avrcp|Webcam|Camera|Tablet Mode|Virtual|vmmouse|QEMU|VirtualBox|xen-'
+    local ib iv ip in_ iph isys iu ih kind kb_seen='' kbl=() ud uprod umfr user kkey kbus kname
+    while IFS=$'\t' read -r ib iv ip in_ iph isys iu ih; do
+        [ -n "$in_" ] || continue
+        [[ $in_ =~ $noise ]] && continue
+        case " $ih " in
+            *' mouse'*) kind='Мышь / тачпад' ;;
+            *' kbd '*) if [[ " $ih " == *' leds '* ]] || [[ ${in_,,} == *keyboard* ]]; then kind='Клавиатура'; else continue; fi ;;
+            *) continue ;;
+        esac
+        # USB-устройство — первый родитель с idVendor
+        ud=''; uprod=''; umfr=''; user=''
+        if [ -n "$isys" ]; then
+            ud=/sys$isys
+            while [ -n "$ud" ] && [ "$ud" != /sys ] && [ ! -e "$ud/idVendor" ]; do ud=${ud%/*}; done
+            [ -e "$ud/idVendor" ] || ud=''
+        fi
+        case $ib in
+            0003) kbus=USB
+                  if [ -n "$ud" ]; then uprod=$(readf "$ud/product"); umfr=$(readf "$ud/manufacturer"); user=$(clean_sn "$(readf "$ud/serial")"); fi ;;
+            0005) kbus=Bluetooth; [ -n "$iu" ] && user="BT ${iu^^}" ;;
+            0011) if [ "$is_laptop" = 1 ]; then kbus='встроенная (PS/2)'; else kbus='PS/2'; fi ;;
+            0018) kbus='встроенный (I2C)' ;;
+            *) continue ;;
+        esac
+        kkey="$kind|${ud:-${iu:-$in_}}"
+        [[ $kb_seen == *"<$kkey>"* ]] && continue
+        kb_seen+="<$kkey>"
+        kname=${uprod:-$in_}
+        [ -n "$umfr" ] && [[ $kname != *"$umfr"* ]] && kname="$kname ($umfr)"
+        line "$kind" "$kname | $kbus$([ "$ib" = 0003 ] || [ "$ib" = 0005 ] && echo " | VID:PID ${iv^^}:${ip^^}") | S/N $( [ -n "$user" ] && hide "$user" || echo нет )"
+        kbl+=("$([ "$kind" = Клавиатура ] && echo клавиатура || echo мышь) $kname$( [ -n "$user" ] && [ "$PERSONAL" != 1 ] && echo " (S/N $user)")")
+    done < <(awk '
+        function out() { if (n != "") print b "\t" v "\t" p "\t" n "\t" ph "\t" s "\t" u "\t" h; b = v = p = n = ph = s = u = h = "" }
+        /^I:/ { out(); for (i = 2; i <= NF; i++) { split($i, kv, "="); if (kv[1] == "Bus") b = kv[2]; if (kv[1] == "Vendor") v = kv[2]; if (kv[1] == "Product") p = kv[2] } }
+        /^N: Name=/ { n = $0; sub(/^N: Name="/, "", n); sub(/"$/, "", n) }
+        /^P: Phys=/ { ph = substr($0, 9) }
+        /^S: Sysfs=/ { s = substr($0, 10) }
+        /^U: Uniq=/ { u = substr($0, 9) }
+        /^H: Handlers=/ { h = substr($0, 13) }
+        END { out() }' /proc/bus/input/devices 2>/dev/null)
+    printf '%s\n' "${kbl[@]}" | grep -q '^клавиатура' || line 'Клавиатура' 'не найдена'
+    printf '%s\n' "${kbl[@]}" | grep -q '^мышь' || line 'Мышь / тачпад' 'не найдена'
+    REPORT['Клавиатура и мышь']=$(join_by ', ' "${kbl[@]}")
 
     # ================= ОС и обновления =================
     section 'ОС и обновления'
@@ -914,8 +992,12 @@ main() {
     REPORT['Замечания']=$(join_by '; ' "${ISSUES[@]}")
 
     if [ -n "$CSV" ]; then
-        if write_csv "$CSV" 2>/dev/null; then note "
-  Строка добавлена в $([ "$PERSONAL" = 1 ] && echo "${CSV##*/}" || echo "$CSV")"; else err_msg "
+        if write_csv "$CSV" 2>/dev/null; then
+            [ "$CSV_WRITTEN" != "$CSV" ] && warn_msg "
+  В ${CSV##*/} колонки от старой версии скрипта — пишу в ${CSV_WRITTEN##*/}"
+            note "
+  Строка добавлена в $([ "$PERSONAL" = 1 ] && echo "${CSV_WRITTEN##*/}" || echo "$CSV_WRITTEN")"
+        else err_msg "
   Не удалось записать CSV: $CSV"; fi
     fi
     if [ -n "$JSON" ]; then

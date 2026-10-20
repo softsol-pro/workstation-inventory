@@ -14,7 +14,7 @@
 # В начале скрипт спрашивает, чей это компьютер. Для личного ПК имя ПК, пользователь, серийники,
 # учётки, имя домена, VPN-ключи и IP-адреса не собираются.
 
-VERSION='1.1.0'
+VERSION='1.2.0'
 
 # ================= поддержка macOS =================
 # ОБНОВЛЯТЬ РАЗ В ГОД — осенью, когда выходит новая macOS: дописать её номер в конец списка.
@@ -33,7 +33,7 @@ D_SEC=(); D_NAME=(); D_VAL=(); D_ST=()
 SECTION=''
 REPORT_KEYS=('Дата' 'ПК' 'Пользователь' 'Модель' 'Серийник' 'Тип' 'CPU' 'ОЗУ ГБ' 'ОЗУ распаяно/слоты' 'Диски' 'C: свободно ГБ'
     'Мониторы' 'Принтеры' 'ИБП/батарея' 'Windows' 'Сборка' 'Поддержка до' 'Последнее обновление' 'Ожидают обновлений'
-    'Антивирус' 'Польз. админ' 'Домен/VPN' 'OpenVPN' 'Замечания')
+    'Антивирус' 'Польз. админ' 'Домен/VPN' 'OpenVPN' 'Замечания' 'Клавиатура и мышь')
 REPORT_VALS=()
 
 rset() { local i; for i in "${!REPORT_KEYS[@]}"; do if [ "${REPORT_KEYS[i]}" = "$1" ]; then REPORT_VALS[i]=$2; return; fi; done; }
@@ -133,10 +133,19 @@ cfg_get() {  # значение поля; массив — по элементу
 
 # ================= CSV / JSON =================
 csv_q() { local s=${1//\"/\"\"}; printf '"%s"' "$s"; }
+CSV_WRITTEN=''
 write_csv() {
-    local f=$1 hdr='' row='' i
+    local f=$1 hdr='' row='' i first n=1 base ext
     for i in "${!REPORT_KEYS[@]}"; do hdr="$hdr$(csv_q "${REPORT_KEYS[i]}");"; row="$row$(csv_q "${REPORT_VALS[i]:-}");"; done
     hdr=${hdr%;}; row=${row%;}
+    # если в файле заголовок от старой версии (другой набор колонок) — пишем рядом в name-v2.csv, name-v3.csv…
+    base=${1%.*}; ext=${1##*.}; if [ "$ext" = "$1" ]; then ext=''; else ext=".$ext"; fi
+    while [ -s "$f" ] && [ "$n" -lt 9 ]; do
+        first=$(head -1 "$f" | tr -d '\r'); first=${first#$'\xEF\xBB\xBF'}
+        [ "$first" = "$hdr" ] && break
+        n=$((n + 1)); f="$base-v$n$ext"
+    done
+    CSV_WRITTEN=$f
     {
         if [ ! -s "$f" ]; then printf '\xEF\xBB\xBF%s\r\n' "$hdr"; fi
         printf '%s\r\n' "$row"
@@ -191,6 +200,26 @@ hex_ascii() {  # 0x484D41... → HMA...
     [[ $1 == 0x* ]] && [[ $h =~ ^[0-9A-Fa-f]+$ ]] && [ $(( ${#h} % 2 )) = 0 ] || { printf '%s' "$1"; return; }
     for ((i = 0; i < ${#h}; i += 2)); do out="$out\\x${h:i:2}"; done
     printf '%b' "$out" | tr -d '\000' | tr -cd '[:print:]'
+}
+clean_sn() {
+    local s; s=$(trim "$1"); s=${s%.}
+    case $s in ''|'Not Specified'|'Not Available'|Unknown|None|'[Empty]'|-|N/A) s='' ;; esac
+    [[ $s =~ ^0+$ ]] && s=''
+    printf '%s' "$s"
+}
+# EDID в виде hex-строки (ioreg на Intel-Mac) → имя|серийник-текст|числовой код
+edid_hex() {
+    local h=$1 off i tag s name='' sn='' num=0 b
+    [ "${#h}" -ge 256 ] || return 1
+    num=$(( 16#${h:30:2}${h:28:2}${h:26:2}${h:24:2} ))
+    for off in 54 72 90 108; do
+        [ "${h:off*2:6}" = 000000 ] || continue
+        tag=${h:off*2+6:2}; s=''
+        for ((i = off + 5; i < off + 18; i++)); do b=${h:i*2:2}; [ "$b" = 0a ] && break; s="$s\\x$b"; done
+        s=$(trim "$(printf '%b' "$s")")
+        case $tag in fc|FC) name=$s ;; ff|FF) sn=$s ;; esac
+    done
+    printf '%s|%s|%s' "$name" "$(clean_sn "$sn")" "$num"
 }
 jedec() { case $1 in 0x80AD|0x00AD) echo 'SK Hynix' ;; 0x80CE|0x00CE) echo Samsung ;; 0x802C|0x002C) echo Micron ;; 0x0198|0x8198) echo Kingston ;; *) echo "$1" ;; esac; }
 
@@ -357,7 +386,8 @@ main() {
             sns="$sns|$msn|"
             case $MV_KIND in sold) sold=$((sold + msize)) ;; slot) slot=$((slot + msize)) ;; *) unk=$((unk + msize)) ;; esac
             [ "$MV_SURE" = 1 ] || guess=1
-            line "$bank" "$msize ГБ $mtype-${mspeed%% *} | $mmfr $mpn | $MV_TEXT"
+            msn=$(clean_sn "$msn")
+            line "$bank" "$msize ГБ $mtype-${mspeed%% *} | $mmfr $mpn | S/N $( [ -n "$msn" ] && hide "$msn" || echo нет ) | $MV_TEXT"
         done < <(awk '
             function out() { if (b != "") print b "\t" r["Size"] "\t" r["Type"] "\t" r["Speed"] "\t" r["Manufacturer"] "\t" r["Part Number"] "\t" r["Serial Number"] }
             /^ +(BANK|DIMM|ChannelA|ChannelB).*:$/ || /^ +[^:]*DIMM[^:]*:$/ { out(); b = $0; sub(/^ +/, "", b); sub(/:$/, "", b); split("", r); next }
@@ -375,7 +405,11 @@ main() {
 
     # ================= диски =================
     section 'Диски'
-    local dk di dname ssd dbytes proto loc smart dtype hs dlist=() dcount=0
+    local dk di dname ssd dbytes proto loc smart dtype hs dlist=() dcount=0 dsns dsn
+    # серийники дисков: system_profiler (NVMe / SATA) → «disk0=серийник;»
+    dsns=$(system_profiler SPNVMeDataType SPSerialATADataType 2>/dev/null | awk '
+        /Serial Number:/ { s = $0; sub(/.*Serial Number: */, "", s) }
+        /BSD Name: disk[0-9]+$/ { b = $0; sub(/.*BSD Name: */, "", b); if (s != "") printf "%s=%s;", b, s; s = "" }')
     while IFS= read -r dk; do
         di=$(diskutil info "$dk" 2>/dev/null)
         dname=$(field 'Device / Media Name' <<< "$di"); ssd=$(field 'Solid State' <<< "$di")
@@ -386,8 +420,9 @@ main() {
         elif [ "$ssd" = No ]; then dtype=HDD; else dtype='?'; fi
         case $smart in Verified) hs=ok ;; Failing) hs=bad ;; *) hs=''; smart="SMART: ${smart:-нет данных}" ;; esac
         dcount=$((dcount + 1))
-        line "Диск ${dk#/dev/}" "${dname:-?} | $dtype | $(gb "$dbytes") ГБ | ${proto:-?} | ${loc:-?} | $smart" "$hs" "$([ "$hs" = bad ] && echo "Диск ${dname:-$dk}: SMART $smart")"
-        [ "$proto" = USB ] || dlist+=("$dtype $(gb "$dbytes") ГБ")
+        dsn=''; [[ ";$dsns" == *";${dk#/dev/}="* ]] && { dsn=${dsns#*"${dk#/dev/}="}; dsn=$(clean_sn "${dsn%%;*}"); }
+        line "Диск ${dk#/dev/}" "${dname:-?} | $dtype | $(gb "$dbytes") ГБ | ${proto:-?} | ${loc:-?} | S/N $( [ -n "$dsn" ] && hide "$dsn" || echo нет ) | $smart" "$hs" "$([ "$hs" = bad ] && echo "Диск ${dname:-$dk}: SMART $smart")"
+        [ "$proto" = USB ] || dlist+=("$dtype $(gb "$dbytes") ГБ$( [ -n "$dsn" ] && [ "$PERSONAL" != 1 ] && echo " (S/N $dsn)")")
     done < <(diskutil list physical 2>/dev/null | awk '/^\/dev\/disk[0-9]+/ { print $1 }')
     [ "$dcount" = 0 ] && line 'Диски' 'не определены'
     local mp dsize davail f s fp
@@ -405,13 +440,28 @@ main() {
 
     # ================= периферия =================
     section 'Мониторы и периферия'
-    local mname msn mconn mdt mons=() i=0
+    local mname msn mconn mdt mons=() i=0 iodisp='' x en es ec
+    # запасной источник серийников: ioreg. Apple Silicon — ProductAttributes, Intel — сырой EDID (IODisplayEDID)
+    while IFS= read -r x; do
+        en=$(sed -n 's/.*"ProductName"="\([^"]*\)".*/\1/p' <<< "$x")
+        es=$(sed -n 's/.*"AlphanumericSerialNumber"="\([^"]*\)".*/\1/p' <<< "$x")
+        ec=$(sed -n 's/.*"SerialNumber"=\([0-9]*\).*/\1/p' <<< "$x")
+        [ -n "$en" ] && iodisp="$iodisp$en|$(clean_sn "$es")|${ec:-0}"$'\n'
+    done < <(ioreg -lw0 2>/dev/null | grep -o '"ProductAttributes"={[^}]*}')
+    while IFS= read -r x; do x=$(edid_hex "$x") && iodisp="$iodisp$x"$'\n'; done < <(ioreg -lw0 -r -c IODisplayConnect 2>/dev/null | sed -n 's/.*"IODisplayEDID" = <\([0-9a-fA-F]*\)>.*/\1/p')
     while IFS='|' read -r mname msn mconn mdt; do
         [ -n "$mname" ] || continue
         i=$((i + 1))
         if [ "$mconn" = Internal ] || [[ $mdt == *Built-in* ]]; then mconn='встроенный'; else mconn='внешний'; fi
-        line "Монитор $i" "$mname | S/N $(hide "${msn:-?}") | $mconn"
-        mons+=("$mname")
+        msn=$(clean_sn "$msn"); ec=0
+        x=$(awk -F'|' -v n="$mname" 'tolower($1) == tolower(n) { print; exit }' <<< "$iodisp")
+        if [ -n "$x" ]; then es=$(cut -d'|' -f2 <<< "$x"); ec=$(cut -d'|' -f3 <<< "$x"); [ -z "$msn" ] && msn=$es; fi
+        if [ -n "$msn" ] && [ "${ec:-0}" -gt 0 ] && [ "$msn" != "$ec" ]; then x="$msn (код EDID $ec)"
+        elif [ -n "$msn" ]; then x=$msn
+        elif [ "${ec:-0}" -gt 0 ]; then x="нет в EDID (код EDID $ec)"
+        else x='нет'; fi
+        line "Монитор $i" "$mname | S/N $(hide "$x") | $mconn"
+        if [ -n "$msn" ] && [ "$PERSONAL" != 1 ]; then mons+=("$mname (S/N $msn)"); else mons+=("$mname"); fi
     done < <(system_profiler SPDisplaysDataType 2>/dev/null | awk '
         function out() { if (name != "") print name "|" sn "|" conn "|" dt; name = ""; sn = ""; conn = ""; dt = "" }
         { i = match($0, /[^ ]/) }
@@ -458,7 +508,8 @@ main() {
         fi
         if [ -n "$bcharge$bmax" ]; then
             if { [ -n "$bmax" ] && [ "$bmax" -lt 60 ]; } || [[ $bcond == *Service* ]]; then wst=warn; else wst=ok; fi
-            line 'Батарея' "заряд ${bcharge:-?}%${bmax:+, ёмкость $bmax% от заводской}${bcyc:+, циклов $bcyc}${bcond:+, состояние: $bcond}" "$wst"
+            x=$(clean_sn "$(field 'Serial Number' <<< "$pw")")
+            line 'Батарея' "заряд ${bcharge:-?}%${bmax:+, ёмкость $bmax% от заводской}${bcyc:+, циклов $bcyc}${bcond:+, состояние: $bcond} | S/N $( [ -n "$x" ] && hide "$x" || echo нет )" "$wst"
             rset 'ИБП/батарея' "$([ -n "$bmax" ] && echo "батарея $bmax%" || echo батарея)"
         else
             line 'Батарея' 'нет данных'
@@ -468,6 +519,43 @@ main() {
         if [ -n "$ups" ]; then line 'ИБП' "$ups" ok; rset 'ИБП/батарея' "$ups"
         else line 'ИБП' 'не обнаружен (или подключён без USB-кабеля)' warn; rset 'ИБП/батарея' 'нет'; fi
     fi
+
+    # ---------- клавиатура и мышь ----------
+    # HID-устройства из ioreg: PrimaryUsagePage 1 / Usage 6 — клавиатура, 1/2 — мышь, 13/5 — трекпад.
+    # Transport: USB, Bluetooth, у встроенных — SPI / FIFO / I2C (поле Built-In = Yes).
+    local hk hp hm hs ht hb hv hpid hpage husage kkind kb_seen='' kbl=() kbus kname
+    while IFS=$'\t' read -r hp hm hs ht hb hv hpid hpage husage; do
+        [ -n "$hp" ] || continue
+        if [ "$hpage" = 1 ] && [ "$husage" = 6 ]; then kkind='Клавиатура'
+        elif [ "$hpage" = 1 ] && [ "$husage" = 2 ]; then kkind='Мышь / тачпад'
+        elif [ "$hpage" = 13 ] && [ "$husage" = 5 ]; then kkind='Мышь / тачпад'
+        else continue; fi
+        hk="$kkind|$hp|$hs|$ht|$hv|$hpid"
+        [[ $kb_seen == *"<$hk>"* ]] && continue
+        kb_seen="$kb_seen<$hk>"
+        if [ "$hb" = Yes ] || [[ $ht == SPI || $ht == FIFO || $ht == I2C || $ht == AID* ]]; then kbus="встроенн$([ "$kkind" = Клавиатура ] && echo ая || echo ый) ($ht)"
+        else kbus=${ht:-?}; fi
+        hs=$(clean_sn "$hs")
+        kname=$hp; [ -n "$hm" ] && [[ $kname != *"${hm%% *}"* ]] && kname="$kname ($hm)"
+        line "$kkind" "$kname | $kbus$( [ -n "$hv" ] && [ "$hv" != 0 ] && printf ' | VID:PID %04X:%04X' "$hv" "${hpid:-0}") | S/N $( [ -n "$hs" ] && hide "$hs" || echo нет )"
+        kbl+=("$([ "$kkind" = Клавиатура ] && echo клавиатура || echo мышь) $kname$( [ -n "$hs" ] && [ "$PERSONAL" != 1 ] && echo " (S/N $hs)")")
+    done < <(ioreg -r -c IOHIDDevice -l -w0 -d 1 2>/dev/null | awk '
+        function out() { if (p != "") print p "\t" m "\t" s "\t" t "\t" b "\t" v "\t" pi "\t" pg "\t" u; p = m = s = t = b = v = pi = pg = u = "" }
+        function str(l) { sub(/^[^=]*= /, "", l); gsub(/^"|"$/, "", l); return l }
+        /^\+-o / { out() }
+        /"Product" = /          { p = str($0) }
+        /"Manufacturer" = /     { m = str($0) }
+        /"SerialNumber" = /     { s = str($0) }
+        /"Transport" = /        { t = str($0) }
+        /"Built-In" = /         { b = str($0) }
+        /"VendorID" = /         { v = str($0) }
+        /"ProductID" = /        { pi = str($0) }
+        /"PrimaryUsagePage" = / { pg = str($0) }
+        /"PrimaryUsage" = /     { u = str($0) }
+        END { out() }')
+    printf '%s\n' "${kbl[@]}" | grep -q '^клавиатура' || line 'Клавиатура' 'не найдена'
+    printf '%s\n' "${kbl[@]}" | grep -q '^мышь' || line 'Мышь / тачпад' 'не найдена'
+    rset 'Клавиатура и мышь' "$(join_by ', ' "${kbl[@]}")"
 
     # ================= macOS и обновления =================
     section 'macOS и обновления'
@@ -780,8 +868,11 @@ main() {
     rset 'Замечания' "$(join_by '; ' "${ISSUES[@]}")"
 
     if [ -n "$CSV" ]; then
-        if write_csv "$CSV" 2>/dev/null; then note "
-  Строка добавлена в $([ "$PERSONAL" = 1 ] && echo "${CSV##*/}" || echo "$CSV")"; else err_msg "
+        if write_csv "$CSV" 2>/dev/null; then
+            [ "$CSV_WRITTEN" != "$CSV" ] && warn_msg "
+  В ${CSV##*/} колонки от старой версии скрипта — пишу в ${CSV_WRITTEN##*/}"
+            note "
+  Строка добавлена в $([ "$PERSONAL" = 1 ] && echo "${CSV_WRITTEN##*/}" || echo "$CSV_WRITTEN")"; else err_msg "
   Не удалось записать CSV: $CSV"; fi
     fi
     if [ -n "$JSON" ]; then

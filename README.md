@@ -10,11 +10,12 @@
 
 | Раздел | Windows (`windows/inventory.ps1`) | Linux (`linux/inventory.sh`) |
 |---|---|---|
-| Общее | имя ПК, пользователь, производитель, модель, серийник, ноутбук или нет, время без перезагрузки (> 14 дн. — жёлтый) | то же: `/sys/class/dmi/id`, `chassis_type`, `/proc/uptime` |
+| Общее | имя ПК, пользователь, производитель, модель, серийник, материнская плата и её серийник, ноутбук или нет, время без перезагрузки (> 14 дн. — жёлтый) | то же: `/sys/class/dmi/id` (серийник платы — с root), `chassis_type`, `/proc/uptime` |
 | Процессор | модель, ядра / потоки | `lscpu` |
 | Память | объём (< 8 ГБ — красный, < 16 ГБ — жёлтый), модули: тип, частота, производитель, распайка или съёмная плашка ([как определяется](#распайка-или-слот)), слоты по BIOS | `/proc/meminfo` + `dmidecode -t memory` (нужен root), те же правила определения распайки |
-| Диски | физические диски (SSD / HDD / NVMe, состояние), свободное место на томах | `lsblk` (тип по ROTA и TRAN), SMART через `smartctl`, свободное место на `/` и `/home` |
-| Периферия | мониторы (EDID), принтеры и способ подключения, батарея и её износ, ИБП | мониторы из `/sys/class/drm/*/edid` (`edid-decode`, если установлен), `lpstat`, `/sys/class/power_supply`, ИБП через `upsc` (NUT) или `lsusb` |
+| Диски | физические диски (SSD / HDD / NVMe, серийник, состояние), свободное место на томах | `lsblk` (тип по ROTA и TRAN, серийник), SMART через `smartctl`, свободное место на `/` и `/home` |
+| Периферия | мониторы и их серийники ([из EDID](#серийники)), принтеры и способ подключения, батарея (износ, модель, серийник), ИБП | мониторы из `/sys/class/drm/*/edid` (`edid-decode`, если установлен), `lpstat`, `/sys/class/power_supply`, ИБП через `upsc` (NUT, с серийником) или `lsusb` |
+| Клавиатура и мышь | USB, Bluetooth и встроенные: имя, которое сообщает само устройство, производитель по VID, VID:PID, серийник | `/proc/bus/input/devices` + сведения USB из `/sys` (имя, производитель, серийник), у Bluetooth — адрес |
 | ОС и обновления | версия, сборка, срок поддержки Microsoft, TPM, Secure Boot, служба обновлений, последнее обновление, доступные обновления, ожидание перезагрузки | дистрибутив, ядро, срок поддержки (Ubuntu / Debian), TPM, Secure Boot, последнее обновление и доступные обновления (apt / dnf / yum / zypper / pacman), `reboot-required` / `needs-restarting` |
 | Антивирус | продукты из Центра безопасности, включён ли, актуальны ли базы; ожидаемый антивирус из конфига | Kaspersky Endpoint Security for Linux (`kesl-control`), ClamAV (версия и возраст баз), иначе «не найден» |
 | Администраторы | состав группы «Администраторы», доменные учётки в ней, админ ли текущий пользователь, встроенный Administrator | члены групп sudo / wheel / admin, админ ли пользователь (`sudo -l`), пароль root, вход root по SSH |
@@ -27,7 +28,8 @@
 | Общее, процессор | `system_profiler SPHardwareDataType`, `sysctl` (модель, серийник, Apple Silicon или Intel, ядра производительные / энергоэффективные) |
 | Память | `hw.memsize`, `vm_stat`, `SPMemoryDataType`. Apple Silicon — всегда распайка; на Intel — по полю Apple «Upgradeable Memory», иначе общие [правила](#распайка-или-слот) |
 | Диски | `diskutil` (SSD / HDD / NVMe, SMART), свободное место на томе «Macintosh HD» |
-| Периферия | мониторы (`SPDisplaysDataType`), принтеры (`lpstat`), батарея (ёмкость, циклы, состояние), ИБП (`pmset`) |
+| Периферия | мониторы (`SPDisplaysDataType`, серийник — оттуда или из `ioreg`), принтеры (`lpstat`), батарея (ёмкость, циклы, состояние, серийник), ИБП (`pmset`) |
+| Клавиатура и мышь | HID-устройства из `ioreg`: USB, Bluetooth, встроенные клавиатура и трекпад; имя, производитель, VID:PID, серийник |
 | macOS и обновления | `sw_vers`, поддержка (Apple обновляет три последние версии), последнее обновление из истории установок, `softwareupdate -l` |
 | Защита | FileVault, SIP, Gatekeeper, брандмауэр, Secure Enclave / T2 |
 | Антивирус | версия и возраст баз XProtect, сторонние антивирусы в `/Applications` (Kaspersky, ESET, Sophos и др.) и запущены ли они |
@@ -48,7 +50,7 @@
 | Железо: производитель, модель, CPU, память, диски, мониторы, принтеры, батарея, ИБП | да | да |
 | ОС, сроки поддержки, обновления, TPM, Secure Boot, антивирус | да | да |
 | Права админа у пользователя, вход в домен, наличие VPN, замечания | да | да, без имён |
-| Имя ПК, имя пользователя, серийные номера (ПК и мониторов) | да | скрыто |
+| Имя ПК, имя пользователя, все серийные номера (ПК, плата, мониторы, диски, память, батарея, клавиатура и мышь) | да | скрыто |
 | Состав группы администраторов, доменные учётки | имена | только количество |
 | Имя домена, сервер входа, имена и серверы VPN-ключей, IP туннеля и принтеров, пути к файлам отчёта | да | скрыто |
 
@@ -60,20 +62,20 @@
 
 ## Быстрый запуск
 
-Однострочники берут файлы из конкретного релиза, а не из `main`. Подставьте нужную версию вместо `v1.1.0`.
+Однострочники берут файлы из конкретного релиза, а не из `main`. Подставьте нужную версию вместо `v1.2.0`.
 
 ### Windows
 
 PowerShell **от администратора**:
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory.ps1')).TrimStart([char]0xFEFF))) -SkipWU
+[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory.ps1')).TrimStart([char]0xFEFF))) -SkipWU
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory.ps1')).TrimStart([char]0xFEFF))) -Owner company -Config '\\server\share\inventory\config.json' -CsvPath '\\server\share\inventory\inventory.csv'
+[Net.ServicePointManager]::SecurityProtocol = 3072; & ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((New-Object Net.WebClient).DownloadData('https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory.ps1')).TrimStart([char]0xFEFF))) -Owner company -Config '\\server\share\inventory\config.json' -CsvPath '\\server\share\inventory\inventory.csv'
 ```
 
 > Почему не `irm`: GitHub отдаёт ассеты релиза как `application/octet-stream`, и `Invoke-RestMethod` в Windows PowerShell 5.1
@@ -83,13 +85,13 @@ PowerShell **от администратора**:
 ### Linux
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory.sh | sudo bash -s -- --skip-updates
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory.sh | sudo bash -s -- --skip-updates
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /mnt/share/inventory/inventory.csv
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /mnt/share/inventory/inventory.csv
 ```
 
 ### macOS
@@ -97,13 +99,13 @@ curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/downloa
 В «Терминале» (в релизе файл называется `inventory-macos.sh`):
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory-macos.sh | sudo bash -s -- --skip-updates
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory-macos.sh | sudo bash -s -- --skip-updates
 ```
 
 С конфигом и записью в общую таблицу:
 
 ```bash
-curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.1.0/inventory-macos.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /Volumes/share/inventory/inventory.csv
+curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/download/v1.2.0/inventory-macos.sh | sudo bash -s -- --owner company --config https://intranet.example.com/inventory/config.json --csv /Volumes/share/inventory/inventory.csv
 ```
 
 > Ссылки `releases/download/...` открываются без авторизации, только если репозиторий **публичный**.
@@ -116,7 +118,7 @@ curl -fsSL https://github.com/softsol-pro/workstation-inventory/releases/downloa
 ### Windows
 
 ```powershell
-$v = 'v1.1.0'; $b = "https://github.com/softsol-pro/workstation-inventory/releases/download/$v"; $f = "$env:TEMP\inventory.ps1"
+$v = 'v1.2.0'; $b = "https://github.com/softsol-pro/workstation-inventory/releases/download/$v"; $f = "$env:TEMP\inventory.ps1"
 $wc = New-Object Net.WebClient; $wc.DownloadFile("$b/inventory.ps1", $f)
 $expected = (($wc.DownloadString("$b/SHA256SUMS") -split "`n" | Where-Object { $_ -match 'inventory\.ps1' }) -split '\s+')[0]
 if ((Get-FileHash $f -Algorithm SHA256).Hash -eq $expected) { powershell -ExecutionPolicy Bypass -File $f -SkipWU } else { Write-Host 'ХЕШ НЕ СОВПАДАЕТ' -ForegroundColor Red }
@@ -125,13 +127,13 @@ if ((Get-FileHash $f -Algorithm SHA256).Hash -eq $expected) { powershell -Execut
 ### Linux
 
 ```bash
-cd "$(mktemp -d)" && v=v1.1.0 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory.sh" -fsSLO "$b/SHA256SUMS" && sha256sum -c --ignore-missing SHA256SUMS && sudo bash inventory.sh --skip-updates
+cd "$(mktemp -d)" && v=v1.2.0 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory.sh" -fsSLO "$b/SHA256SUMS" && sha256sum -c --ignore-missing SHA256SUMS && sudo bash inventory.sh --skip-updates
 ```
 
 ### macOS
 
 ```bash
-cd "$(mktemp -d)" && v=v1.1.0 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory-macos.sh" -fsSLO "$b/SHA256SUMS" && grep inventory-macos.sh SHA256SUMS | shasum -a 256 -c && sudo bash inventory-macos.sh --skip-updates
+cd "$(mktemp -d)" && v=v1.2.0 && b=https://github.com/softsol-pro/workstation-inventory/releases/download/$v && curl -fsSLO "$b/inventory-macos.sh" -fsSLO "$b/SHA256SUMS" && grep inventory-macos.sh SHA256SUMS | shasum -a 256 -c && sudo bash inventory-macos.sh --skip-updates
 ```
 
 ## Запуск с общей папки (без интернета)
@@ -167,6 +169,8 @@ sudo bash /Volumes/share/inventory/inventory-macos.sh --owner company --config /
 | `-SkipWU` | `--skip-updates` | не проверять доступные обновления (на Windows поиск в Центре обновления занимает до 1–2 минут) |
 
 Колонки CSV у всех трёх версий одинаковые, поэтому Windows, Linux и macOS можно писать в одну таблицу.
+С версии 1.2.0 в конце добавлена колонка «Клавиатура и мышь». Если в файле, указанном в `-CsvPath` / `--csv`, заголовок от прежней версии,
+скрипт не трогает его и пишет строку в соседний `<имя>-v2.csv` (следующие запуски дописывают туда же). Так старые и новые строки не перемешиваются и колонки не съезжают.
 Для Linux в колонке `Windows` будет дистрибутив, в `Сборка` — ядро, в `C: свободно ГБ` — свободное место на `/`.
 Для macOS — версия macOS, номер сборки и свободное место на «Macintosh HD».
 
@@ -205,6 +209,24 @@ sudo bash /Volumes/share/inventory/inventory-macos.sh --owner company --config /
 В Linux конфиг разбирается через `jq`, а если его нет — через `python3`. Если нет ни того ни другого, скрипт работает без конфига и предупреждает об этом.
 Регэксп `corpVpnKeyPattern` в Linux проверяется как ERE (bash `=~`), поэтому PCRE-конструкции вроде `\d` или `(?i)` там не работают.
 
+## Серийники
+
+Скрипты показывают серийники всего, что их сообщает: ПК, материнская плата, диски, модули памяти, батарея, ИБП (Linux, через NUT),
+мониторы, клавиатуры и мыши. Если устройство серийника не сообщает, пишется «нет». В режиме «личный» все серийники скрыты.
+
+**Мониторы.** Серийник берётся из EDID — данных, которые монитор сам передаёт по кабелю. Там два поля:
+- текстовый серийник — обычно совпадает с номером на наклейке или с его началом (так делают BenQ, Philips, LG, Dell и большинство других);
+- числовой код — у многих моделей это лишь часть номера или внутренний код.
+
+Поэтому вывод выглядит так: `S/N ABC1234567890 (код EDID 12345)`. Если текстового серийника в EDID нет, пишется
+`нет в EDID (код EDID 975)`: такой монитор номер с наклейки по кабелю не сообщает, и узнать его программно нельзя.
+В Windows EDID читается напрямую из реестра, без прав администратора.
+
+**Клавиатуры и мыши.** У большинства недорогих USB-клавиатур и мышей серийника нет. Для беспроводных комплектов
+через приёмник (Logitech Unifying / Bolt и т. п.) виден сам приёмник, а не клавиатура. У Bluetooth-устройств вместо серийника
+показывается их адрес, и видны они, только пока подключены. На настольном ПК Windows часто показывает «Standard PS/2 Keyboard»
+даже без PS/2-клавиатуры, поэтому PS/2 упоминается, только если других клавиатур нет.
+
 ## Распайка или слот
 
 Отдельного поля «распаяно» в SMBIOS нет, поэтому скрипты решают по признакам. Правила идут по порядку, первое сработавшее решает:
@@ -228,7 +250,7 @@ sudo bash /Volumes/share/inventory/inventory-macos.sh --owner company --config /
 ## Пример вывода
 
 ```
-Инвентаризация WS-042 — 19.10.2026 14:27 (inventory.ps1 1.1.0)
+Инвентаризация WS-042 — 19.10.2026 14:27 (inventory.ps1 1.2.0)
 Конфиг: \\server\share\inventory\config.json
 
 === Общее ===
@@ -320,7 +342,7 @@ CI запускает эти проверки на каждый коммит: Wi
 1. Поднять версию в `$ScriptVersion` (`windows/inventory.ps1`) и `VERSION` (`linux/inventory.sh`, `macos/inventory.sh`).
 2. Закоммитить, поставить тег и запушить:
    ```bash
-   git tag v1.1.1 && git push origin v1.1.1
+   git tag v1.2.1 && git push origin v1.2.1
    ```
 3. Workflow [release.yml](.github/workflows/release.yml) проверит, что версия во всех трёх скриптах совпадает с тегом, и приложит к релизу
    `inventory.ps1`, `inventory.sh`, `inventory-macos.sh` и `SHA256SUMS`.

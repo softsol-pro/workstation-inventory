@@ -64,6 +64,16 @@ if [ -s "$C" ]; then
     done
     v=$(jcnt "$C" 'Диски' 'Диск '); chk 'число дисков совпадает с /sys/block' "в отчёте $v, /sys/block $e" [ "$v" = "$e" ]
 
+    # серийники дисков — сверка с /sys/block/*/device/serial (у NVMe и части SCSI), независимо от lsblk
+    have jq && for d in /sys/block/*; do
+        [ -r "$d/device/serial" ] || continue
+        e=$(tr -d '\0' < "$d/device/serial" | xargs); [ "${#e}" -ge 4 ] || continue
+        v=$(jq -r --arg n "Диск ${d##*/}" '[.details[] | select(.Name == $n) | .Value][0] // ""' "$C" 2>/dev/null)
+        chk "серийник диска ${d##*/} совпадает с /sys" "в отчёте «$v», /sys «$e»" [ "${v#*"$e"}" != "$v" ]
+    done
+    v=$(jcnt "$C" 'Мониторы и периферия' 'Клавиатура'); chk 'строка про клавиатуру есть' "строк: $v" [ "$v" -ge 1 ]
+    v=$(jcnt "$C" 'Мониторы и периферия' 'Мышь'); chk 'строка про мышь есть' "строк: $v" [ "$v" -ge 1 ]
+    have jq && jq -r '.details[] | select(.Name == "Клавиатура" or .Name == "Мышь / тачпад" or (.Name | startswith("Монитор"))) | "        \(.Name): \(.Value)"' "$C"
     v=$(jtop "$C" details); chk 'в отчёте больше 20 строк' "строк: $v" [ "$v" -gt 20 ]
     if [ "$(id -u)" = 0 ] && have dmidecode && dmidecode -t 17 2>/dev/null | grep -qE '^[[:space:]]Size: [0-9]+ [MGT]B'; then
         v=$(jsum "$C" 'ОЗУ распаяно/слоты'); chk 'модули памяти разобраны (dmidecode)' 'пусто' [ -n "$v" ]
@@ -85,12 +95,24 @@ if [ -s "$P" ]; then
     secrets=("$(hostname)" "${SUDO_USER:-$(id -un)}")
     [ -r /sys/class/dmi/id/product_serial ] && secrets+=("$(tr -d '\0' < /sys/class/dmi/id/product_serial | xargs)")
     have realm && secrets+=("$(realm list --name-only 2>/dev/null | head -1)")
+    [ -r /sys/class/dmi/id/board_serial ] && secrets+=("$(tr -d '\0' < /sys/class/dmi/id/board_serial | xargs)")
+    while IFS= read -r x; do secrets+=("$x"); done < <(lsblk -dno SERIAL 2>/dev/null | xargs -n1 2>/dev/null)
+    for x in /sys/class/power_supply/BAT*/serial_number; do [ -r "$x" ] && secrets+=("$(xargs < "$x")"); done
     for x in "${secrets[@]}"; do
         [ "${#x}" -ge 4 ] || continue
         case $x in root|0*|'To be filled'*|'Default string'|'System Serial Number'|None|'Not Specified') continue ;; esac
         chk "нигде нет «$x»" 'найдено в выводе, CSV или JSON' bash -c '! grep -qiwF -- "$1" "$2"' _ "$x" "$TMP/all.txt"
     done
 fi
+
+# ---------- CSV от старой версии: строка должна уйти в -v2.csv ----------
+printf '\nCSV с колонками от старой версии\n'
+printf '\xEF\xBB\xBF"Дата";"ПК"\r\n"x";"y"\r\n' > "$TMP/old.csv"
+bash "$SCRIPT" --owner company --skip-updates --csv "$TMP/old.csv" >/dev/null 2>&1
+v=$(wc -l < "$TMP/old.csv"); chk 'старый файл не тронут' "строк: $v" [ "$v" = 2 ]
+chk 'строка записана в old-v2.csv с новыми колонками' 'old-v2.csv нет или заголовок другой' grep -q '"Клавиатура и мышь"' "$TMP/old-v2.csv"
+bash "$SCRIPT" --owner company --skip-updates --csv "$TMP/old.csv" >/dev/null 2>&1
+v=$(wc -l < "$TMP/old-v2.csv" 2>/dev/null); chk 'повторный запуск дописывает в тот же old-v2.csv' "строк в old-v2: $v" [ "$v" = 3 -a ! -e "$TMP/old-v3.csv" ]
 
 # ---------- без терминала и без --owner ----------
 printf '\nБез терминала и без --owner\n'

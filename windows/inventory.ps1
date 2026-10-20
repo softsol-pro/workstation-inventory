@@ -23,7 +23,7 @@ param(
 )
 
 $ErrorActionPreference = 'SilentlyContinue'
-$ScriptVersion = '1.1.0'
+$ScriptVersion = '1.2.0'
 
 # ================= сроки поддержки Windows =================
 # ОБНОВЛЯТЬ РАЗ В ГОД — когда выходит новая версия Windows 11 (обычно осенью):
@@ -51,7 +51,7 @@ $Colors     = @{ ok = 'Green'; warn = 'Yellow'; bad = 'Red' }
 $Report     = [ordered]@{}
 'Дата','ПК','Пользователь','Модель','Серийник','Тип','CPU','ОЗУ ГБ','ОЗУ распаяно/слоты','Диски','C: свободно ГБ',
 'Мониторы','Принтеры','ИБП/батарея','Windows','Сборка','Поддержка до','Последнее обновление','Ожидают обновлений',
-'Антивирус','Польз. админ','Домен/VPN','OpenVPN','Замечания' | ForEach-Object { $Report[$_] = '' }
+'Антивирус','Польз. админ','Домен/VPN','OpenVPN','Замечания','Клавиатура и мышь' | ForEach-Object { $Report[$_] = '' }
 $Report['Дата'] = Get-Date -Format 'yyyy-MM-dd HH:mm'
 $Report['ПК']   = $env:COMPUTERNAME
 
@@ -70,6 +70,29 @@ function Test-Port([string]$Ip, [int]$Port, [int]$Ms = 800) {
     catch { $false } finally { $t.Close() }
 }
 function ConvertFrom-WmiString($Arr) { if ($Arr) { (($Arr | Where-Object { $_ -ne 0 }) | ForEach-Object { [char]$_ }) -join '' } }
+# серийник без заглушек производителя («To be filled by O.E.M.», «Default string», нули)
+function Get-CleanSerial($Value) {
+    $s = "$Value".Trim().TrimEnd('.').Trim()
+    if ($s -match '^(0+|To be filled.*|Default string|System Serial Number|None|N/A|Not Specified|Not Available|Base Board Serial Number|\.+|-+)$') { '' } else { $s }
+}
+# EDID: текстовый серийник (дескриптор 0xFF), числовой код (байты 12–15), имя (0xFC), год выпуска
+function Read-Edid([byte[]]$E) {
+    $r = @{ Serial = ''; Num = 0; Name = ''; Year = 0 }
+    if (-not $E -or $E.Count -lt 128) { return $r }
+    $r.Num  = [BitConverter]::ToUInt32($E, 12)
+    $r.Year = 1990 + $E[17]
+    foreach ($off in 54, 72, 90, 108) {
+        if ($E[$off] -ne 0 -or $E[$off + 1] -ne 0 -or $E[$off + 2] -ne 0) { continue }
+        $txt = (-join ($E[($off + 5)..($off + 17)] | ForEach-Object { [char]$_ })).Split([char]10)[0].Trim()
+        if ($E[$off + 3] -eq 0xFF) { $r.Serial = $txt } elseif ($E[$off + 3] -eq 0xFC) { $r.Name = $txt }
+    }
+    $r
+}
+# сырой EDID монитора из реестра (права админа не нужны): DISPLAY\PHL0918\5&2d1b&0&UID4352_0 → ...\Device Parameters\EDID
+function Get-MonitorEdid([string]$InstanceName) {
+    $id = $InstanceName -replace '_\d+$', ''
+    (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Enum\$id\Device Parameters" -Name EDID -ErrorAction SilentlyContinue).EDID
+}
 
 # Распайка или слот. Поля «распаяно» в SMBIOS нет, поэтому решаем по признакам — первый сработавший решает.
 # Part Number с номером микросхемы DRAM (а не модуля) — память распаяна на плате
@@ -177,6 +200,11 @@ Line 'Пользователь'   (Hide $cs.UserName)
 Line 'Производитель'  $cs.Manufacturer
 Line 'Модель'         $Model
 Line 'Серийный номер' (Hide $bios.SerialNumber)
+$bb = Get-CimInstance Win32_BaseBoard | Select-Object -First 1
+if ($bb) {
+    $bbSn = Get-CleanSerial $bb.SerialNumber
+    Line 'Материнская плата' ("{0} {1} | S/N {2}" -f "$($bb.Manufacturer)".Trim(), "$($bb.Product)".Trim(), $(if ($bbSn) { Hide $bbSn } else { 'нет' }))
+}
 Line 'Тип'            $(if ($IsLaptop) { 'Ноутбук' } else { 'Настольный / прочее' })
 $upSt = if ($Uptime.TotalDays -gt 14) { 'warn' } else { 'ok' }
 Line 'Без перезагрузки' ('{0} дн. {1} ч.' -f [int][math]::Floor($Uptime.TotalDays), $Uptime.Hours) $upSt $(if ($upSt -eq 'warn') { 'Не перезагружался больше 2 недель' })
@@ -217,7 +245,8 @@ foreach ($m in $mem) {
     switch ($v.Kind) { 'sold' { $solderedGB += $gb } 'slot' { $slotGB += $gb } default { $unknownGB += $gb } }
     if (-not $v.Sure) { $guess = $true }
     $label = ("{0} {1}" -f $m.BankLabel, $m.DeviceLocator).Trim()
-    Line $label ("{0} ГБ {1}-{2} | {3} {4} | {5}" -f $gb, $type, $m.ConfiguredClockSpeed, $m.Manufacturer, "$($m.PartNumber)".Trim(), $v.Text)
+    $msn = Get-CleanSerial $sn
+    Line $label ("{0} ГБ {1}-{2} | {3} {4} | S/N {5} | {6}" -f $gb, $type, $m.ConfiguredClockSpeed, $m.Manufacturer, "$($m.PartNumber)".Trim(), $(if ($msn) { Hide $msn } else { 'нет' }), $v.Text)
 }
 $memSum = "распаяно $solderedGB ГБ, в слотах $slotGB ГБ"
 if ($unknownGB) { $memSum += ", не определено $unknownGB ГБ" }
@@ -237,8 +266,9 @@ if ($pd.Count) {
         if ($bus -in 'NVMe', '17') { $type = 'SSD NVMe'; $bus = 'NVMe' }
         $size = [math]::Round($d.Size / 1GB)
         $hs = if ($health -in 'Healthy', '0') { 'ok' } elseif ($health -in 'Warning', '1') { 'warn' } else { 'bad' }
-        Line "Диск $($d.DeviceId)" ("{0} | {1} | {2} ГБ | {3} | {4}" -f $d.FriendlyName, $type, $size, $bus, $health) $hs $(if ($hs -ne 'ok') { "Диск $($d.FriendlyName): состояние $health" })
-        if ($bus -notin 'USB', '7') { $diskList += "$type $size ГБ" }
+        $dsn = Get-CleanSerial $d.SerialNumber
+        Line "Диск $($d.DeviceId)" ("{0} | {1} | {2} ГБ | {3} | S/N {4} | {5}" -f $d.FriendlyName, $type, $size, $bus, $(if ($dsn) { Hide $dsn } else { 'нет' }), $health) $hs $(if ($hs -ne 'ok') { "Диск $($d.FriendlyName): состояние $health" })
+        if ($bus -notin 'USB', '7') { $diskList += "$type $size ГБ$(if ($dsn -and -not $IsPersonal) { " (S/N $dsn)" })" }
     }
 } else {
     foreach ($d in Get-CimInstance Win32_DiskDrive) {
@@ -266,8 +296,13 @@ foreach ($m in Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID) {
     $name = ConvertFrom-WmiString $m.UserFriendlyName; $mfr = ConvertFrom-WmiString $m.ManufacturerName; $sn = ConvertFrom-WmiString $m.SerialNumberID
     if (-not $name) { $name = '(встроенный / без имени)' }
     $disp = if ($mfr -and $name -like "$mfr*") { $name } else { "$mfr $name".Trim() }
-    Line "Монитор $i" ("{0} | S/N {1} | {2} г." -f $disp, (Hide $sn), $m.YearOfManufacture)
-    $monNames += $disp
+    # серийник: текст из EDID (обычно совпадает с наклейкой или её началом), иначе то, что отдал WMI; плюс числовой код EDID
+    $ed = Read-Edid (Get-MonitorEdid $m.InstanceName)
+    $snTxt = Get-CleanSerial $(if ($ed.Serial) { $ed.Serial } elseif ($sn -ne "$($ed.Num)") { $sn })
+    $monSn = if ($snTxt -and $ed.Num -and $snTxt -ne "$($ed.Num)") { "$snTxt (код EDID $($ed.Num))" }
+             elseif ($snTxt) { $snTxt } elseif ($ed.Num) { "нет в EDID (код EDID $($ed.Num))" } else { 'нет' }
+    Line "Монитор $i" ("{0} | S/N {1} | {2} г." -f $disp, (Hide $monSn), $m.YearOfManufacture)
+    $monNames += $(if ($snTxt -and -not $IsPersonal) { "$disp (S/N $snTxt)" } else { $disp })
 }
 if (-not $i) { Line 'Мониторы' 'не определены' }
 $Report['Мониторы'] = $monNames -join ', '
@@ -295,7 +330,11 @@ if ($IsLaptop) {
         $wear = $null; if ($des -and $full) { $wear = [math]::Round($full / $des * 100) }
         if (-not $wear -and -not $IsAdmin) { $Incomplete.Add('износ батареи') }
         $wSt  = if ($wear -and $wear -lt 60) { 'warn' } else { 'ok' }
-        Line 'Батарея' ("заряд {0}%{1}" -f $bat[0].EstimatedChargeRemaining, $(if ($wear) { ", ёмкость $wear% от заводской" })) $wSt
+        $bsd  = Get-CimInstance -Namespace root\wmi -ClassName BatteryStaticData | Select-Object -First 1
+        $bSn  = Get-CleanSerial $bsd.SerialNumber
+        $bId  = ("{0} {1}" -f "$($bsd.ManufactureName)".Trim(), "$($bsd.DeviceName)".Trim()).Trim()
+        Line 'Батарея' ("заряд {0}%{1}{2}{3}" -f $bat[0].EstimatedChargeRemaining, $(if ($wear) { ", ёмкость $wear% от заводской" }),
+                        $(if ($bId) { " | $bId" }), $(if ($bSn) { " | S/N $(Hide $bSn)" } elseif ($IsAdmin) { ' | S/N нет' } else { ' | S/N: нужны права админа' })) $wSt
         $Report['ИБП/батарея'] = $(if ($wear) { "батарея $wear%" } else { 'батарея' })
     }
     if ($upsPnp.Count) { Line 'ИБП' $upsPnp[0].FriendlyName 'ok' }
@@ -304,6 +343,75 @@ if ($IsLaptop) {
     elseif ($upsPnp.Count) { Line 'ИБП' $upsPnp[0].FriendlyName 'ok'; $Report['ИБП/батарея'] = $upsPnp[0].FriendlyName }
     else                   { Line 'ИБП' 'не обнаружен (или подключён без USB-кабеля)' 'warn'; $Report['ИБП/батарея'] = 'нет' }
 }
+
+# ---------- клавиатура и мышь ----------
+# Windows называет почти всё «Клавиатура HID» / «HID-совместимая мышь», поэтому находим само USB- или Bluetooth-устройство
+# и берём имя, которое сообщает железка. Все устройства — одним запросом Win32_PnPEntity, а «родное» имя — через CIM-метод
+# GetDeviceProperties (~10 мс; Get-PnpDeviceProperty на некоторых ПК тратит по 5–8 с на вызов).
+$VidNames = @{ '046D' = 'Logitech'; '045E' = 'Microsoft'; '413C' = 'Dell'; '17EF' = 'Lenovo'; '03F0' = 'HP'; '04F2' = 'Chicony'
+               '1532' = 'Razer'; '05AC' = 'Apple'; '0B05' = 'ASUS'; '1B1C' = 'Corsair'; '1038' = 'SteelSeries'; '24AE' = 'Rapoo'
+               '0461' = 'Primax'; '093A' = 'PixArt'; '04D9' = 'Holtek'; '1A2C' = 'China Resource Semico'; '258A' = 'Sino Wealth'
+               '1EA7' = 'SHARKOON'; '04CA' = 'Lite-On'; '0458' = 'KYE (Genius)'; '056E' = 'Elecom'; '1D57' = 'Xenta'; '2DC8' = '8BitDo'
+               '0951' = 'Kingston (HyperX)'; '3434' = 'Keychron'; '04E8' = 'Samsung'; '09DA' = 'A4Tech'; '1BCF' = 'Sunplus' }
+$TouchVendors = @{ 'SYNA' = 'Synaptics'; 'ELAN' = 'Elan'; 'ALPS' = 'Alps'; 'MSFT' = 'Microsoft Precision'; 'FTCS' = 'FocalTech'; 'GXTP' = 'Goodix'; 'ASUE' = 'ASUS' }
+$genericRx = '^(HID|USB Input Device|USB-устройство ввода|Составное|USB Composite|Устройство ввода|Стандартн|Standard|Generic|BT_FUNCTION)'
+$virtRx    = 'Terminal Server|Remote Desktop|RDP|Hyper-V|VMware|VirtualBox|Citrix|Virtual|CONVERTEDDEVICE|INTC816'
+function Get-BusDesc($Ent) {
+    if (-not $Ent) { return '' }
+    $r = Invoke-CimMethod -InputObject $Ent -MethodName GetDeviceProperties -Arguments @{ devicePropertyKeys = [string[]]@('DEVPKEY_Device_BusReportedDeviceDesc') } -ErrorAction SilentlyContinue
+    "$(($r.deviceProperties | Select-Object -First 1).Data)".Trim()
+}
+$pnpAll = @(Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue)
+$kbSeen = @{}; $kbList = @(); $ps2 = @()
+foreach ($dev in @($pnpAll | Where-Object { "$($_.PNPClass)" -in 'Keyboard', 'Mouse' })) {
+    $id = "$($dev.DeviceID)"
+    if ($id -match $virtRx -or "$($dev.Name)" -match $virtRx) { continue }
+    $isKb = "$($dev.PNPClass)" -eq 'Keyboard'
+    $kind = if ($isKb) { 'Клавиатура' } else { 'Мышь / тачпад' }
+    $vid = $null; $pidv = $null; $bus = $null; $name = $null; $ser = $null; $key = $null; $mfr = ''
+    if ($id -match 'VID_([0-9A-F]{4})&PID_([0-9A-F]{4})') {
+        # USB: HID\VID_x&PID_y&MI_00\… → само устройство USB\VID_x&PID_y\<серийник или ID от Windows>
+        $vid = $Matches[1]; $pidv = $Matches[2]; $bus = 'USB'
+        $usbDev = $pnpAll | Where-Object { "$($_.DeviceID)" -match "^USB\\VID_$vid&PID_$pidv\\" } | Select-Object -First 1
+        $name = Get-BusDesc $usbDev
+        if (-not $name -or $name -match $genericRx) { $name = Get-BusDesc $dev }
+        $seg = if ($usbDev) { ("$($usbDev.DeviceID)" -split '\\')[-1] } else { '' }
+        if ($seg -and $seg -notmatch '&') { $ser = Get-CleanSerial $seg }   # в ID, сгенерированном Windows, есть «&»
+        $key = "$kind|$(if ($usbDev) { $usbDev.DeviceID } else { $id })"
+    } elseif ($id -match 'VID&[0-9A-F]{2}([0-9A-F]{4})_PID&([0-9A-F]{4})') {
+        # Bluetooth (классический и LE): имя и адрес — у устройства BTHENUM / BTHLE
+        $vid = $Matches[1]; $pidv = $Matches[2]; $bus = 'Bluetooth'
+        $btDev = $pnpAll | Where-Object { "$($_.DeviceID)" -match "^BTH(ENUM|LEDEVICE)\\.*VID&[0-9A-F]{2}$vid.*PID&$pidv" } | Select-Object -First 1
+        $mac = $null
+        if ($btDev -and "$($btDev.DeviceID)" -match '([0-9A-F]{12})(?:_C[0-9A-F]+)?$') { $mac = $Matches[1] }
+        if ($mac) {
+            $ser = 'BT ' + ($mac -replace '(..)(?!$)', '$1:')
+            $name = "$(($pnpAll | Where-Object { "$($_.DeviceID)" -match "^BTH(ENUM|LE)\\DEV_$mac" } | Select-Object -First 1).Name)"
+        }
+        $key = "$kind|$(if ($mac) { $mac } else { $id })"
+    } elseif ($id -match '^ACPI\\PNP0[3F]') {
+        # PS/2: на ноутбуке это встроенная клавиатура / тачпад, на настольном ПК — часто «фантом» из BIOS без подключённого устройства
+        if ($IsLaptop) { $bus = 'встроенная (PS/2)'; $key = "$kind|$id" }
+        else { $ps2 += $kind; continue }
+    } elseif (-not $isKb -and $id -match '^HID\\([A-Z]{4})') {
+        # тачпад по I2C (HID\SYNA…, HID\ELAN…)
+        $bus = 'встроенный (I2C)'; $key = "$kind|$id"
+        if ($TouchVendors.ContainsKey($Matches[1])) { $mfr = $TouchVendors[$Matches[1]] }
+    } else { continue }   # прочие HID-клавиатуры без VID — служебные (горячие клавиши, кнопки корпуса)
+    if ($kbSeen.ContainsKey($key)) { continue }
+    $kbSeen[$key] = $true
+    if (-not $name -or $name -match $genericRx) { $name = "$($dev.Name)" }
+    if (-not $mfr -and $vid) { $mfr = if ($VidNames.ContainsKey($vid)) { $VidNames[$vid] } else { "VID $vid" } }
+    $disp = if ($mfr -and $name -notlike "*$mfr*") { "$name ($mfr)" } else { $name }
+    Line $kind ("{0} | {1}{2} | S/N {3}" -f $disp, $bus, $(if ($vid) { " | VID:PID $vid`:$pidv" }), $(if ($ser) { Hide $ser } else { 'нет' }))
+    $kbList += "$(if ($isKb) { 'клавиатура' } else { 'мышь' }) $disp$(if ($ser -and -not $IsPersonal) { " (S/N $ser)" })"
+}
+foreach ($k in 'Клавиатура', 'Мышь / тачпад') {
+    $has = $kbList | Where-Object { $_ -like $(if ($k -eq 'Клавиатура') { 'клавиатура*' } else { 'мышь*' }) }
+    if (-not $has -and $ps2 -contains $k) { Line $k 'PS/2 (порт есть, но подключено ли устройство — Windows не сообщает)' }
+    elseif (-not $has) { Line $k 'не найдена' }
+}
+$Report['Клавиатура и мышь'] = $kbList -join ', '
 
 # ================= Windows и обновления =================
 Section 'Windows и обновления'
@@ -584,8 +692,16 @@ $Report['Замечания'] = $Issues -join '; '
 
 if ($CsvPath) {
     try {
-        [pscustomobject]$Report | Export-Csv -Path $CsvPath -Append -NoTypeInformation -Encoding UTF8 -Delimiter ';' -Force -ErrorAction Stop
-        Write-Host "`n  Строка добавлена в $(if ($IsPersonal) { Split-Path $CsvPath -Leaf } else { $CsvPath })" -ForegroundColor DarkGray
+        # если в файле заголовок от старой версии (другой набор колонок) — пишем рядом в name-v2.csv, name-v3.csv…, чтобы колонки не съехали
+        $expected = ($Report.Keys | ForEach-Object { '"' + $_ + '"' }) -join ';'
+        $target = $CsvPath; $n = 1
+        while ((Test-Path $target) -and "$(Get-Content $target -TotalCount 1 -Encoding UTF8)".TrimStart([char]0xFEFF) -ne $expected -and $n -lt 9) {
+            $n++
+            $target = Join-Path (Split-Path $CsvPath -Parent) ("{0}-v{1}{2}" -f [IO.Path]::GetFileNameWithoutExtension($CsvPath), $n, [IO.Path]::GetExtension($CsvPath))
+        }
+        if ($target -ne $CsvPath) { Write-Host "`n  В $(Split-Path $CsvPath -Leaf) колонки от старой версии скрипта — пишу в $(Split-Path $target -Leaf)" -ForegroundColor DarkYellow }
+        [pscustomobject]$Report | Export-Csv -Path $target -Append -NoTypeInformation -Encoding UTF8 -Delimiter ';' -Force -ErrorAction Stop
+        Write-Host "`n  Строка добавлена в $(if ($IsPersonal) { Split-Path $target -Leaf } else { $target })" -ForegroundColor DarkGray
     } catch {
         Write-Host "`n  Не удалось записать CSV: $($_.Exception.Message)" -ForegroundColor Red
     }

@@ -77,6 +77,9 @@ if [ -s "$C" ]; then
     if dscl . -read "/Users/$u" AuthenticationAuthority 2>/dev/null | grep -q LocalCachedUser; then e='доменная'; else e='локальная'; fi
     v=$(jdet "$C" 'Учётка пользователя'); chk 'тип учётки пользователя' "в отчёте «$v», ожидалось «$e»" [ "${v#"$e"}" != "$v" ]
 
+    v=$(jdet "$C" 'Клавиатура'); chk 'строка про клавиатуру есть' 'нет строки' [ -n "$v" ]
+    v=$(jdet "$C" 'Мышь / тачпад'); chk 'строка про мышь есть' 'нет строки' [ -n "$v" ]
+    have jq && jq -n 1 >/dev/null 2>&1 && jq -r '.details[] | select(.Name == "Клавиатура" or .Name == "Мышь / тачпад" or (.Name | startswith("Монитор")) or (.Name | startswith("Диск "))) | "        \(.Name): \(.Value)"' "$C"
     v=$(jtop "$C" details); chk 'в отчёте больше 20 строк' "строк: $v" [ "$v" -gt 20 ]
     printf '        sudo: %s; неполных проверок: %s; замечаний: %s\n' "$([ "$(id -u)" = 0 ] && echo да || echo нет)" "$(jtop "$C" incomplete)" "$(jtop "$C" issues)"
 fi
@@ -93,13 +96,24 @@ if [ -s "$P" ]; then
     u=${SUDO_USER:-$(id -un)}
     secrets=("$(scutil --get ComputerName 2>/dev/null)" "$(scutil --get LocalHostName 2>/dev/null)" "$(hostname -s)" "$u" "$(id -F "$u" 2>/dev/null)"
         "$(field 'Serial Number (system)' <<< "$(system_profiler SPHardwareDataType 2>/dev/null)")"
-        "$(dsconfigad -show 2>/dev/null | awk -F' = ' '/Active Directory Domain/ { print $2; exit }')")
+        "$(dsconfigad -show 2>/dev/null | awk -F' = ' '/Active Directory Domain/ { print $2; exit }')"
+        "$(field 'Serial Number' <<< "$(system_profiler SPPowerDataType 2>/dev/null)")")
+    while IFS= read -r x; do secrets+=("$x"); done < <(system_profiler SPNVMeDataType SPSerialATADataType 2>/dev/null | awk -F': ' '/Serial Number:/ { print $2 }')
     for x in "${secrets[@]}"; do
         [ "${#x}" -ge 4 ] || continue
         case $x in root|admin|0*|"Not Available") continue ;; esac
         chk "нигде нет «$x»" 'найдено в выводе, CSV или JSON' /bin/bash -c '! grep -qiwF -- "$1" "$2"' _ "$x" "$TMP/all.txt"
     done
 fi
+
+# ---------- CSV от старой версии: строка должна уйти в -v2.csv ----------
+printf '\nCSV с колонками от старой версии\n'
+printf '\xEF\xBB\xBF"Дата";"ПК"\r\n"x";"y"\r\n' > "$TMP/old.csv"
+$SH "$SCRIPT" --owner company --skip-updates --csv "$TMP/old.csv" >/dev/null 2>&1
+v=$(wc -l < "$TMP/old.csv" | tr -d ' '); chk 'старый файл не тронут' "строк: $v" [ "$v" = 2 ]
+chk 'строка записана в old-v2.csv с новыми колонками' 'old-v2.csv нет или заголовок другой' grep -q '"Клавиатура и мышь"' "$TMP/old-v2.csv"
+$SH "$SCRIPT" --owner company --skip-updates --csv "$TMP/old.csv" >/dev/null 2>&1
+v=$(wc -l < "$TMP/old-v2.csv" 2>/dev/null | tr -d ' '); chk 'повторный запуск дописывает в тот же old-v2.csv' "строк в old-v2: $v" [ "$v" = 3 -a ! -e "$TMP/old-v3.csv" ]
 
 # ---------- без терминала и без --owner ----------
 printf '\nБез терминала и без --owner\n'
