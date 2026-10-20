@@ -207,6 +207,7 @@ mem_verdict() {
 # серийник без заглушек производителя
 clean_sn() {
     local s; s=$(trim "$1"); s=${s%.}
+    [[ $s =~ ^(SN|S/N|Serial)[:\ ]+(.*)$ ]] && s=${BASH_REMATCH[2]}
     case $s in ''|'Not Specified'|'Not Available'|Unknown|None|'[Empty]'|'To be filled'*|'Default string'|'System Serial Number'|'Base Board Serial Number'|N/A|-) s='' ;; esac
     [[ $s =~ ^0+$ ]] && s=''
     printf '%s' "$s"
@@ -578,8 +579,8 @@ main() {
     # /proc/bus/input/devices: клавиатуры — обработчик kbd (+ leds или «keyboard» в имени), мыши — обработчик mouse.
     # Имя, производителя и серийник берём у самого USB-устройства в /sys, у Bluetooth серийник — адрес устройства.
     local noise='Power Button|Sleep Button|Lid Switch|Video Bus|PC Speaker|HDA |HDMI|DisplayPort|Headphone|Headset|Mic|Speaker|Consumer Control|System Control|WMI|[Hh]otkey|Extra Buttons|Intel HID|gpio-keys|Wireless hotkeys|Avrcp|Webcam|Camera|Tablet Mode|Virtual|vmmouse|QEMU|VirtualBox|xen-'
-    local ib iv ip in_ iph isys iu ih kind kb_seen='' kbl=() ud uprod umfr user kkey kbus kname
-    while IFS=$'\t' read -r ib iv ip in_ iph isys iu ih; do
+    local ib iv ip in_ isys iu ih kind kb_seen='' kbl=() ud uprod umfr user kkey kbus kname
+    while IFS=$'\t' read -r ib iv ip in_ _ isys iu ih; do
         [ -n "$in_" ] || continue
         [[ $in_ =~ $noise ]] && continue
         case " $ih " in

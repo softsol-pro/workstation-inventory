@@ -77,6 +77,8 @@ jobs:
           grep -q 'Контроллеры домена' /tmp/plutil.txt
       - name: Проверка достоверности на Mac без jq (чтение отчёта через osascript)
         run: PATH=/tmp/nojq:$PATH /bin/bash tests/check-macos.sh
+      - name: Сырые данные об устройствах ввода (для сверки с разделом «Клавиатура и мышь»)
+        run: ioreg -r -c IOHIDDevice -l -w0 -d 1 | grep -E '^\+-o|"(Product|Manufacturer|Transport|Built-In|PrimaryUsagePage|PrimaryUsage|VendorID)" =' || true
       - name: Полный отчёт для просмотра (с softwareupdate)
         run: /bin/bash macos/inventory.sh --owner company --config config.example.json
 
@@ -95,6 +97,8 @@ jobs:
         run: sudo bash tests/check-linux.sh --strict
       - name: Полный отчёт для просмотра
         run: sudo bash linux/inventory.sh --owner company --config config.example.json
+      - name: Сырые данные об устройствах ввода (для сверки с разделом «Клавиатура и мышь»)
+        run: cat /proc/bus/input/devices || true
 
   linux-container:
     name: пробный запуск в ${{ matrix.image }}

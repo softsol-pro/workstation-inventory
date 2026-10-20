@@ -72,7 +72,7 @@ function Test-Port([string]$Ip, [int]$Port, [int]$Ms = 800) {
 function ConvertFrom-WmiString($Arr) { if ($Arr) { (($Arr | Where-Object { $_ -ne 0 }) | ForEach-Object { [char]$_ }) -join '' } }
 # серийник без заглушек производителя («To be filled by O.E.M.», «Default string», нули)
 function Get-CleanSerial($Value) {
-    $s = "$Value".Trim().TrimEnd('.').Trim()
+    $s = ("$Value".Trim().TrimEnd('.').Trim()) -replace '^(SN|S/N|Serial)[: ]+', ''
     if ($s -match '^(0+|To be filled.*|Default string|System Serial Number|None|N/A|Not Specified|Not Available|Base Board Serial Number|\.+|-+)$') { '' } else { $s }
 }
 # EDID: текстовый серийник (дескриптор 0xFF), числовой код (байты 12–15), имя (0xFC), год выпуска

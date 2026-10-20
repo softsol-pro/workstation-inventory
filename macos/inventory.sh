@@ -202,7 +202,8 @@ hex_ascii() {  # 0x484D41... → HMA...
     printf '%b' "$out" | tr -d '\000' | tr -cd '[:print:]'
 }
 clean_sn() {
-    local s; s=$(trim "$1"); s=${s%.}
+    local s re='^(SN|S/N|Serial)[: ]+(.*)$'; s=$(trim "$1"); s=${s%.}
+    [[ $s =~ $re ]] && s=${BASH_REMATCH[2]}
     case $s in ''|'Not Specified'|'Not Available'|Unknown|None|'[Empty]'|-|N/A) s='' ;; esac
     [[ $s =~ ^0+$ ]] && s=''
     printf '%s' "$s"
