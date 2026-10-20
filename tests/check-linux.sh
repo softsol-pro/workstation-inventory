@@ -67,7 +67,9 @@ if [ -s "$C" ]; then
     # серийники дисков — сверка с /sys/block/*/device/serial (у NVMe и части SCSI), независимо от lsblk
     have jq && for d in /sys/block/*; do
         [ -r "$d/device/serial" ] || continue
-        e=$(tr -d '\0' < "$d/device/serial" | xargs); [ "${#e}" -ge 4 ] || continue
+        e=$(tr -d '\0' < "$d/device/serial" | xargs | sed -E 's/^(SN|S\/N|Serial)[: ]+//')
+        [ "${#e}" -ge 4 ] || continue
+        [[ $e =~ ^0+$ ]] && continue   # заглушка (так отдают виртуальные диски Azure)
         v=$(jq -r --arg n "Диск ${d##*/}" '[.details[] | select(.Name == $n) | .Value][0] // ""' "$C" 2>/dev/null)
         chk "серийник диска ${d##*/} совпадает с /sys" "в отчёте «$v», /sys «$e»" [ "${v#*"$e"}" != "$v" ]
     done
