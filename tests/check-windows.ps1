@@ -68,6 +68,12 @@ if (Test-Path $cj) {
     }
     $kb = @($c.details | Where-Object { $_.Name -in 'Клавиатура', 'Мышь / тачпад' })
     Check 'раздел клавиатуры и мыши есть' ($kb.Count -ge 2) "строк: $($kb.Count)"
+    # если Windows видит USB-клавиатуру, отчёт не должен говорить «не найдена»
+    $usbKb = @(Get-CimInstance Win32_PnPEntity -Filter "PNPClass = 'Keyboard'" | Where-Object { "$($_.DeviceID)" -match 'VID_[0-9A-F]{4}' -and "$($_.Name)" -notmatch 'Virtual|Hyper-V|Terminal Server' })
+    if ($usbKb.Count) {
+        $kbRow = $kb | Where-Object { $_.Name -eq 'Клавиатура' } | Select-Object -First 1
+        Check 'USB-клавиатура из Win32_PnPEntity попала в отчёт' ("$($kbRow.Value)" -ne 'не найдена') "USB-клавиатур: $($usbKb.Count), в отчёте «$($kbRow.Value)»"
+    }
     foreach ($r in $kb) { Write-Host "        $($r.Name): $($r.Value)" -ForegroundColor DarkGray }
     Check 'в отчёте больше 20 строк' (@($c.details).Count -gt 20) "строк: $(@($c.details).Count)"
     Write-Host ("        права администратора: {0}; неполные проверки: {1}" -f $c.isAdmin, $(if ($c.incomplete) { $c.incomplete -join ', ' } else { 'нет' })) -ForegroundColor DarkGray

@@ -74,6 +74,12 @@ if [ -s "$C" ]; then
         chk "серийник диска ${d##*/} совпадает с /sys" "в отчёте «$v», /sys «$e»" [ "${v#*"$e"}" != "$v" ]
     done
     v=$(jcnt "$C" 'Мониторы и периферия' 'Клавиатура'); chk 'строка про клавиатуру есть' "строк: $v" [ "$v" -ge 1 ]
+    # если ядро видит настоящую клавиатуру (USB / Bluetooth / PS/2), отчёт не должен говорить «не найдена»
+    e=$(awk '/^I:/ { b = $2 } /^N: Name=/ { n = tolower($0) } /^H: Handlers=/ { if ($0 ~ / kbd / && n ~ /keyboard/ && b ~ /Bus=(0003|0005|0011)/) c++ } END { print c + 0 }' /proc/bus/input/devices 2>/dev/null)
+    if [ "${e:-0}" -gt 0 ] && have jq; then
+        v=$(jq -r '[.details[] | select(.Name == "Клавиатура") | .Value][0] // ""' "$C")
+        chk 'клавиатура из /proc/bus/input/devices попала в отчёт' "клавиатур в /proc: $e, в отчёте «$v»" [ "$v" != 'не найдена' ]
+    fi
     v=$(jcnt "$C" 'Мониторы и периферия' 'Мышь'); chk 'строка про мышь есть' "строк: $v" [ "$v" -ge 1 ]
     have jq && jq -r '.details[] | select(.Name == "Клавиатура" or .Name == "Мышь / тачпад" or (.Name | startswith("Монитор"))) | "        \(.Name): \(.Value)"' "$C"
     v=$(jtop "$C" details); chk 'в отчёте больше 20 строк' "строк: $v" [ "$v" -gt 20 ]

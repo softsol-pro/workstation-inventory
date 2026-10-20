@@ -78,6 +78,9 @@ if [ -s "$C" ]; then
     v=$(jdet "$C" 'Учётка пользователя'); chk 'тип учётки пользователя' "в отчёте «$v», ожидалось «$e»" [ "${v#"$e"}" != "$v" ]
 
     v=$(jdet "$C" 'Клавиатура'); chk 'строка про клавиатуру есть' 'нет строки' [ -n "$v" ]
+    # если ioreg видит HID-клавиатуру (Usage Page 1, Usage 6), отчёт не должен говорить «не найдена»
+    e=$(ioreg -r -c IOHIDDevice -l -w0 -d 1 2>/dev/null | grep -c '"PrimaryUsage" = 6$')
+    [ "${e:-0}" -gt 0 ] && chk 'клавиатура из ioreg попала в отчёт' "клавиатур в ioreg: $e, в отчёте «$v»" [ "$v" != 'не найдена' ]
     v=$(jdet "$C" 'Мышь / тачпад'); chk 'строка про мышь есть' 'нет строки' [ -n "$v" ]
     have jq && jq -n 1 >/dev/null 2>&1 && jq -r '.details[] | select(.Name == "Клавиатура" or .Name == "Мышь / тачпад" or (.Name | startswith("Монитор")) or (.Name | startswith("Диск "))) | "        \(.Name): \(.Value)"' "$C"
     v=$(jtop "$C" details); chk 'в отчёте больше 20 строк' "строк: $v" [ "$v" -gt 20 ]

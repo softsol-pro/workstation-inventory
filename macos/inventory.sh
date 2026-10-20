@@ -374,7 +374,7 @@ main() {
         line 'Встроенная' "$total_gb ГБ ${mtype:-?} | ${mmfr:-?} | распайка (Apple Silicon, память в корпусе процессора)"
         sold=$total_gb
     else
-        while IFS=$'\t' read -r bank msize mtype mspeed mmfr mpn msn; do
+        while IFS=$'\x1f' read -r bank msize mtype mspeed mmfr mpn msn; do
             [ -n "$bank" ] || continue
             case $msize in *GB) msize=${msize%% *} ;; *MB) msize=$(( ${msize%% *} / 1024 )) ;; *) continue ;; esac
             mpn=$(hex_ascii "$mpn"); mmfr=$(jedec "$mmfr")
@@ -390,7 +390,7 @@ main() {
             msn=$(clean_sn "$msn")
             line "$bank" "$msize ГБ $mtype-${mspeed%% *} | $mmfr $mpn | S/N $( [ -n "$msn" ] && hide "$msn" || echo нет ) | $MV_TEXT"
         done < <(awk '
-            function out() { if (b != "") print b "\t" r["Size"] "\t" r["Type"] "\t" r["Speed"] "\t" r["Manufacturer"] "\t" r["Part Number"] "\t" r["Serial Number"] }
+            function out() { if (b != "") print b "\037" r["Size"] "\037" r["Type"] "\037" r["Speed"] "\037" r["Manufacturer"] "\037" r["Part Number"] "\037" r["Serial Number"] }
             /^ +(BANK|DIMM|ChannelA|ChannelB).*:$/ || /^ +[^:]*DIMM[^:]*:$/ { out(); b = $0; sub(/^ +/, "", b); sub(/:$/, "", b); split("", r); next }
             b != "" { l = $0; sub(/^[ \t]+/, "", l); n = index(l, ": "); if (n) r[substr(l, 1, n - 1)] = substr(l, n + 2) }
             END { out() }' <<< "$memtxt")
@@ -525,7 +525,7 @@ main() {
     # HID-устройства из ioreg: PrimaryUsagePage 1 / Usage 6 — клавиатура, 1/2 — мышь, 13/5 — трекпад.
     # Transport: USB, Bluetooth, у встроенных — SPI / FIFO / I2C (поле Built-In = Yes).
     local hk hp hm hs ht hb hv hpid hpage husage kkind kb_seen='' kbl=() kbus kname
-    while IFS=$'\t' read -r hp hm hs ht hb hv hpid hpage husage; do
+    while IFS=$'\x1f' read -r hp hm hs ht hb hv hpid hpage husage; do
         [ -n "$hp" ] || continue
         if [ "$hpage" = 1 ] && [ "$husage" = 6 ]; then kkind='Клавиатура'
         elif [ "$hpage" = 1 ] && [ "$husage" = 2 ]; then kkind='Мышь / тачпад'
@@ -541,7 +541,7 @@ main() {
         line "$kkind" "$kname | $kbus$( [ -n "$hv" ] && [ "$hv" != 0 ] && printf ' | VID:PID %04X:%04X' "$hv" "${hpid:-0}") | S/N $( [ -n "$hs" ] && hide "$hs" || echo нет )"
         kbl+=("$([ "$kkind" = Клавиатура ] && echo клавиатура || echo мышь) $kname$( [ -n "$hs" ] && [ "$PERSONAL" != 1 ] && echo " (S/N $hs)")")
     done < <(ioreg -r -c IOHIDDevice -l -w0 -d 1 2>/dev/null | awk '
-        function out() { if (p != "") print p "\t" m "\t" s "\t" t "\t" b "\t" v "\t" pi "\t" pg "\t" u; p = m = s = t = b = v = pi = pg = u = "" }
+        function out() { if (p != "") print p "\037" m "\037" s "\037" t "\037" b "\037" v "\037" pi "\037" pg "\037" u; p = m = s = t = b = v = pi = pg = u = "" }
         function str(l) { sub(/^[^=]*= /, "", l); gsub(/^"|"$/, "", l); return l }
         /^\+-o / { out() }
         /"Product" = /          { p = str($0) }

@@ -397,7 +397,7 @@ main() {
     free_gb=$(awk -v k="$ma_kb" 'BEGIN { printf "%.1f", k / 1048576 }')
     if [ "$IS_ROOT" = 1 ] && have dmidecode; then
         mapfile -t mods < <(dmidecode -t 17 2>/dev/null | awk -F': ' '
-            function out() { if (n) print r["Size"] "\t" r["Type"] "\t" spd() "\t" r["Manufacturer"] "\t" r["Part Number"] "\t" r["Serial Number"] "\t" r["Form Factor"] "\t" r["Bank Locator"] "\t" r["Locator"] }
+            function out() { if (n) print r["Size"] "\037" r["Type"] "\037" spd() "\037" r["Manufacturer"] "\037" r["Part Number"] "\037" r["Serial Number"] "\037" r["Form Factor"] "\037" r["Bank Locator"] "\037" r["Locator"] }
             function spd() { return ("Configured Memory Speed" in r) ? r["Configured Memory Speed"] : r["Configured Clock Speed"] }
             /^Memory Device/ { out(); n = 1; split("", r); next }
             /^Handle/ { out(); n = 0; next }
@@ -407,15 +407,15 @@ main() {
     local m size unit gbm mtype speed mfr part sn ff bank loc v sold=0 slot=0 unk=0 guess=0 sum_gb=0 slots_bios='' max_bios=''
     local -a good=()
     for m in "${mods[@]}"; do
-        IFS=$'\t' read -r size mtype speed mfr part sn ff bank loc <<< "$m"
+        IFS=$'\x1f' read -r size mtype speed mfr part sn ff bank loc <<< "$m"
         unit=${size##* }; gbm=${size%% *}
         [[ $gbm =~ ^[0-9]+$ ]] || continue
         case $unit in MB) gbm=$((gbm / 1024)) ;; TB) gbm=$((gbm * 1024)) ;; esac
-        good+=("$gbm"$'\t'"$mtype"$'\t'"$speed"$'\t'"$mfr"$'\t'"$part"$'\t'"$sn"$'\t'"$ff"$'\t'"$bank"$'\t'"$loc")
+        good+=("$gbm"$'\x1f'"$mtype"$'\x1f'"$speed"$'\x1f'"$mfr"$'\x1f'"$part"$'\x1f'"$sn"$'\x1f'"$ff"$'\x1f'"$bank"$'\x1f'"$loc")
         sns+=("$sn")
     done
     if [ "${#good[@]}" -gt 0 ]; then
-        for m in "${good[@]}"; do IFS=$'\t' read -r gbm _ <<< "$m"; sum_gb=$((sum_gb + gbm)); done
+        for m in "${good[@]}"; do IFS=$'\x1f' read -r gbm _ <<< "$m"; sum_gb=$((sum_gb + gbm)); done
         total_gb=$sum_gb
     else
         total_gb=$(( (mt_kb + 524288) / 1048576 ))
@@ -424,7 +424,7 @@ main() {
     line 'Всего' "$total_gb ГБ (занято $used_pct%, свободно $free_gb ГБ)" "$st" "$([ "$total_gb" -lt 8 ] && echo "Мало ОЗУ: $total_gb ГБ")"
     dupsn=$(printf '%s\n' "${sns[@]}" | sort | uniq -d)
     for m in "${good[@]}"; do
-        IFS=$'\t' read -r gbm mtype speed mfr part sn ff bank loc <<< "$m"
+        IFS=$'\x1f' read -r gbm mtype speed mfr part sn ff bank loc <<< "$m"
         v=0; [ -n "$dupsn" ] && grep -qxF -- "$sn" <<< "$dupsn" && v=1
         mem_verdict "$mtype" "$part" "$sn" "$v" "$ff" "$is_desktop"
         case $MV_KIND in sold) sold=$((sold + gbm)) ;; slot) slot=$((slot + gbm)) ;; *) unk=$((unk + gbm)) ;; esac
@@ -580,7 +580,7 @@ main() {
     # Имя, производителя и серийник берём у самого USB-устройства в /sys, у Bluetooth серийник — адрес устройства.
     local noise='Power Button|Sleep Button|Lid Switch|Video Bus|PC Speaker|HDA |HDMI|DisplayPort|Headphone|Headset|Mic|Speaker|Consumer Control|System Control|WMI|[Hh]otkey|Extra Buttons|Intel HID|gpio-keys|Wireless hotkeys|Avrcp|Webcam|Camera|Tablet Mode|Virtual|vmmouse|QEMU|VirtualBox|xen-'
     local ib iv ip in_ isys iu ih kind kb_seen='' kbl=() ud uprod umfr user kkey kbus kname
-    while IFS=$'\t' read -r ib iv ip in_ _ isys iu ih; do
+    while IFS=$'\x1f' read -r ib iv ip in_ _ isys iu ih; do
         [ -n "$in_" ] || continue
         [[ $in_ =~ $noise ]] && continue
         case " $ih " in
@@ -611,7 +611,7 @@ main() {
         line "$kind" "$kname | $kbus$([ "$ib" = 0003 ] || [ "$ib" = 0005 ] && echo " | VID:PID ${iv^^}:${ip^^}") | S/N $( [ -n "$user" ] && hide "$user" || echo нет )"
         kbl+=("$([ "$kind" = Клавиатура ] && echo клавиатура || echo мышь) $kname$( [ -n "$user" ] && [ "$PERSONAL" != 1 ] && echo " (S/N $user)")")
     done < <(awk '
-        function out() { if (n != "") print b "\t" v "\t" p "\t" n "\t" ph "\t" s "\t" u "\t" h; b = v = p = n = ph = s = u = h = "" }
+        function out() { if (n != "") print b "\037" v "\037" p "\037" n "\037" ph "\037" s "\037" u "\037" h; b = v = p = n = ph = s = u = h = "" }
         /^I:/ { out(); for (i = 2; i <= NF; i++) { split($i, kv, "="); if (kv[1] == "Bus") b = kv[2]; if (kv[1] == "Vendor") v = kv[2]; if (kv[1] == "Product") p = kv[2] } }
         /^N: Name=/ { n = $0; sub(/^N: Name="/, "", n); sub(/"$/, "", n) }
         /^P: Phys=/ { ph = substr($0, 9) }
